@@ -62,7 +62,11 @@ class ChatOrchestrator:
                     },
                 )
                 for reference in math_result.get("references", []):
+
                     sources.append({"source": reference, "score": 1.0})
+
+                    sources.append({"text": reference, "source": "math_solver", "score": 1.0})
+
 
         run_block = execute_tool("kolibri_run", {"steps": 3, "seed": len(message)})
         await session.publish(
@@ -71,8 +75,13 @@ class ChatOrchestrator:
         )
 
         short_answer = self._compose_short_answer(message, sources, math_result)
+
         explanation = self._compose_explanation(message, sources, math_result)
         next_steps = self._compose_next_steps(message, sources, math_result)
+
+        explanation = self._compose_explanation(sources, math_result)
+        next_steps = self._compose_next_steps(sources, math_result)
+
         math_section = self._format_math_result(math_result)
 
         full_response = f"{short_answer}\n\nКак это узнали: {explanation}\n\nЧто дальше: {next_steps}"
@@ -107,12 +116,16 @@ class ChatOrchestrator:
         sources: List[Dict[str, Any]],
         math_result: Optional[Dict[str, Any]],
     ) -> str:
+
         lowered = message.lower()
         if self._looks_like_greeting(message):
             return (
                 "Привет! Я Kolibri Smart Client: помогу спланировать миссии и решу задачи по алгебре и геометрии."
             )
         if "не знаю" in lowered:
+
+        if "не знаю" in message.lower():
+
             return "Пока данных маловато, но я могу поискать больше сведений."
         if math_result and math_result.get("answer"):
             return f"Решение найдено: {math_result['answer']}"
@@ -122,7 +135,10 @@ class ChatOrchestrator:
 
     def _compose_explanation(
         self,
+
         message: str,
+
+
         sources: List[Dict[str, Any]],
         math_result: Optional[Dict[str, Any]],
     ) -> str:
@@ -137,6 +153,7 @@ class ChatOrchestrator:
 
     def _compose_next_steps(
         self,
+
         message: str,
         sources: List[Dict[str, Any]],
         math_result: Optional[Dict[str, Any]],
@@ -148,6 +165,11 @@ class ChatOrchestrator:
                 "при необходимости запустить kolibri_run или verify",
             ]
             return ", ".join(steps)
+
+
+        sources: List[Dict[str, Any]],
+        math_result: Optional[Dict[str, Any]],
+    ) -> str:
 
         steps = ["уточнить критерии успеха", "обновить миссию в Ledger"]
         if sources:
@@ -191,6 +213,7 @@ class ChatOrchestrator:
             return True
         return bool(re.search(r"[0-9].*[=+\-*/^]", message))
 
+
     def _looks_like_greeting(self, message: str) -> bool:
         lowered = message.lower()
         greeting_keywords = [
@@ -202,6 +225,7 @@ class ChatOrchestrator:
             "hey",
         ]
         return any(keyword in lowered for keyword in greeting_keywords)
+
 
 
 __all__ = ["ChatOrchestrator"]
