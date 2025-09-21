@@ -16,11 +16,11 @@
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements-dev.txt  # если появится
-make -j"$(nproc)"  # сборка бэкенда
+make bin/kolibri_run  # сборка бэкенда (цели Makefile указываются с путём `bin/...`)
 ```
 
-Для macOS используйте `./build_macos.sh`, он найдёт OpenSSL и соберёт
-бинарники в `bin/`.
+Для macOS используйте `./build_macos.sh bin/kolibri_run`: скрипт найдёт
+OpenSSL, вызовет `make` с полной целью и соберёт бинарники в `bin/`.
 
 ## Рабочий процесс
 
@@ -77,7 +77,7 @@ make -j"$(nproc)"  # сборка бэкенда
 
 ## Чек-лист перед релизом
 
-- [ ] Собраны бинарники (`make` или `./build_macos.sh`).
+- [ ] Собраны бинарники (`make bin/kolibri_run` или `./build_macos.sh bin/kolibri_run`).
 - [ ] Пройдены `make tests` и пользовательские сценарии из operations guide.
 - [ ] Обновлены roadmap, архитектура и инструкции по запуску.
 - [ ] Обновлён `CHANGELOG` (если ведётся) и описаны заметные изменения в PR.
