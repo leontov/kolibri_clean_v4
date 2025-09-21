@@ -58,6 +58,26 @@ const randomId = () => {
   return Math.random().toString(36).slice(2);
 };
 
+
+const KNOWN_APP_ROUTES = new Set(["chat", "ledger", "settings"]);
+
+let resolvedApiBase: string | null = null;
+let resolvingApiBase: Promise<string> | null = null;
+
+function normalizeBase(value: string): string {
+  const trimmed = value.trim().replace(/\/+$/, "");
+  if (!trimmed) {
+    return "";
+  }
+  if (/^(?:[a-z]+:)?\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+}
+
+function normalizePath(value: string): string {
+  const trimmed = value.trim().replace(/\/+$/, "");
+
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
 }
@@ -67,34 +87,138 @@ function normalizeCandidate(value: string | null | undefined): string {
     return "";
   }
   const trimmed = value.trim();
+
   if (!trimmed) {
     return "";
   }
   if (/^(?:[a-z]+:)?\/\//i.test(trimmed)) {
+
+    return trimmed;
+  }
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+}
+
+function joinBaseAndPath(base: string, path: string): string {
+  if (!base) {
+    return path;
+  }
+  if (!path) {
+    return base;
+  }
+  if (/^(?:[a-z]+:)?\/\//i.test(path)) {
+    return path;
+  }
+  const sanitizedBase = base.replace(/\/+$/, "");
+  const sanitizedPath = path.replace(/^\/+/, "");
+  return `${sanitizedBase}/${sanitizedPath}`;
+}
+
+async function ensureApiBase(): Promise<string> {
+  if (resolvedApiBase !== null) {
+    return resolvedApiBase;
+  }
+  if (!resolvingApiBase) {
+    resolvingApiBase = resolveApiBase();
+  }
+  resolvedApiBase = await resolvingApiBase;
+  return resolvedApiBase;
+
     return trimTrailingSlash(trimmed);
   }
   if (trimmed.startsWith("/")) {
     return trimTrailingSlash(trimmed);
   }
   return `/${trimTrailingSlash(trimmed)}`;
+
 }
 
 function inferBaseFromLocation(): string {
   if (typeof window === "undefined") {
     return "";
   }
+
+
+  const trimmedPath = window.location.pathname.replace(/\/+$/, "");
+  if (!trimmedPath || trimmedPath === "/") {
+    return "";
+  }
+
+
   const trimmedPath = trimTrailingSlash(window.location.pathname);
   if (!trimmedPath || trimmedPath === "/") {
     return "";
   }
+
   const segments = trimmedPath.split("/").filter(Boolean);
   if (segments.length === 0) {
     return "";
   }
+
   const lastSegment = segments[segments.length - 1];
   if (lastSegment.includes(".") || KNOWN_APP_ROUTES.has(lastSegment)) {
     segments.pop();
   }
+
+
+  if (segments.length === 0) {
+    return "";
+  }
+
+  return `/${segments.join("/")}`;
+}
+
+async function resolveApiBase(): Promise<string> {
+  const candidates = resolveApiBaseCandidates();
+  for (const base of candidates) {
+    try {
+      const response = await fetch(`${base}/status`, { method: "GET" });
+      if (response.ok) {
+        return base;
+      }
+    } catch (error) {
+      console.warn(`Kolibri API base candidate failed: ${base}`, error);
+    }
+  }
+  return candidates[candidates.length - 1] ?? "";
+}
+
+function resolveApiBaseCandidates(): string[] {
+  const candidates: string[] = [];
+
+  const addCandidate = (value: string) => {
+    if (!value || candidates.includes(value)) {
+      return;
+    }
+    candidates.push(value);
+  };
+
+  const rawBaseCandidates = resolveRawBaseCandidates();
+  const apiPathCandidates = resolveApiPathCandidates();
+
+  for (const rawBase of rawBaseCandidates) {
+    addCandidate(rawBase);
+    for (const apiPath of apiPathCandidates) {
+      addCandidate(joinBaseAndPath(rawBase, apiPath));
+    }
+  }
+
+  addCandidate("");
+
+  return candidates;
+}
+
+function resolveRawBaseCandidates(): string[] {
+  const rawBases: string[] = [];
+
+  const addBase = (value: string) => {
+    if (!value || rawBases.includes(value)) {
+      return;
+    }
+    rawBases.push(value);
+  };
+
+  addBase(normalizeBase(import.meta.env.VITE_API_BASE ?? ""));
+
   if (segments.length === 0) {
     return "";
   }
@@ -116,16 +240,73 @@ function resolveApiBaseCandidates(): string[] {
 
   addCandidate(import.meta.env.VITE_API_BASE ?? "");
 
+
   if (typeof window !== "undefined") {
     const globalWithApiBase = window as Window & {
       __KOLIBRI_API_BASE__?: string;
       __kolibriApiBase?: string;
     };
+
+    addBase(
+      normalizeBase(
+        globalWithApiBase.__KOLIBRI_API_BASE__ ?? globalWithApiBase.__kolibriApiBase ?? ""
+      )
+    );
+
     addCandidate(globalWithApiBase.__KOLIBRI_API_BASE__ ?? globalWithApiBase.__kolibriApiBase ?? "");
+
 
     const meta = document
       .querySelector('meta[name="kolibri-api-base"]')
       ?.getAttribute("content");
+
+    addBase(normalizeBase(meta ?? ""));
+
+    addBase(normalizeBase(import.meta.env.BASE_URL ?? ""));
+    addBase(inferBaseFromLocation());
+  }
+
+  addBase("");
+
+  return rawBases;
+}
+
+function resolveApiPathCandidates(): string[] {
+  const apiPaths: string[] = [];
+
+  const addPath = (value: string) => {
+    if (apiPaths.includes(value)) {
+      return;
+    }
+    apiPaths.push(value);
+  };
+
+  addPath(normalizePath(import.meta.env.VITE_API_PREFIX ?? ""));
+
+  if (typeof window !== "undefined") {
+    const globalWithPrefix = window as Window & {
+      __KOLIBRI_API_PREFIX__?: string;
+      __kolibriApiPrefix?: string;
+    };
+    addPath(
+      normalizePath(
+        globalWithPrefix.__KOLIBRI_API_PREFIX__ ?? globalWithPrefix.__kolibriApiPrefix ?? ""
+      )
+    );
+
+    const meta = document
+      .querySelector('meta[name="kolibri-api-prefix"]')
+      ?.getAttribute("content");
+    addPath(normalizePath(meta ?? ""));
+  }
+
+  addPath("/api/v1");
+  addPath("/v1");
+  addPath("/api");
+  addPath("");
+
+  return apiPaths;
+
     addCandidate(meta ?? "");
 
     addCandidate(import.meta.env.BASE_URL ?? "");
@@ -181,6 +362,7 @@ function selectToolPayload(data: Record<string, unknown>): unknown {
     return data.result;
   }
   return data;
+
 }
 
 export const useChatStore = create<ChatState>()(
@@ -212,6 +394,12 @@ export const useChatStore = create<ChatState>()(
         void ensureApiBase()
           .then(apiBase => {
             const chatStream = new EventSource(
+
+              `${apiBase}/chat/stream?session_id=${sessionId}`
+            );
+            chatStream.onmessage = () => {};
+            let currentAssistantId: string | null = null;
+
               `${apiBase}/api/v1/chat/stream?session_id=${sessionId}`,
             );
             let currentAssistantId: string | null = null;
@@ -226,6 +414,7 @@ export const useChatStore = create<ChatState>()(
               set({ connected: false, chatStream: null, chainStream: null });
             };
 
+
             chatStream.addEventListener("token", event => {
               const data = JSON.parse((event as MessageEvent).data) as { content: string };
               set(state => {
@@ -236,14 +425,22 @@ export const useChatStore = create<ChatState>()(
                     id: currentAssistantId,
                     role: "assistant",
                     content: "",
+
+                    pending: true
+
                     pending: true,
+
                   });
                 }
                 const idx = messages.findIndex(msg => msg.id === currentAssistantId);
                 if (idx >= 0) {
                   messages[idx] = {
                     ...messages[idx],
+
+                    content: `${messages[idx].content}${data.content}`
+
                     content: `${messages[idx].content}${data.content}`,
+
                   };
                 }
                 return { messages };
@@ -251,16 +448,29 @@ export const useChatStore = create<ChatState>()(
             });
 
             chatStream.addEventListener("tool_call", event => {
+              const data = JSON.parse((event as MessageEvent).data);
+
+
+            chatStream.addEventListener("tool_call", event => {
               const raw = JSON.parse((event as MessageEvent).data) as Record<string, unknown> & {
                 name?: string;
               };
               const payload = selectToolPayload(raw);
+
               set(state => ({
                 messages: [
                   ...state.messages,
                   {
                     id: randomId(),
                     role: "tool",
+
+                    content: JSON.stringify(data, null, 2),
+                    toolName: data.name
+                  }
+                ]
+              }));
+            });
+
                     content: typeof payload === "string" ? payload : JSON.stringify(payload, null, 2),
                     toolName: typeof raw.name === "string" ? raw.name : undefined,
                     toolPayload: payload,
@@ -268,6 +478,7 @@ export const useChatStore = create<ChatState>()(
                 ],
               }));
             });
+
 
             chatStream.addEventListener("final", event => {
               const data = JSON.parse((event as MessageEvent).data) as { content: string };
@@ -280,7 +491,11 @@ export const useChatStore = create<ChatState>()(
                       ...messages[idx],
                       content: data.content,
                       pending: false,
+
+                      sources: extractSources(data.content)
+
                       sources: extractSources(data.content),
+
                     };
                   }
                 } else {
@@ -289,7 +504,11 @@ export const useChatStore = create<ChatState>()(
                     role: "assistant",
                     content: data.content,
                     pending: false,
+
+                    sources: extractSources(data.content)
+
                     sources: extractSources(data.content),
+
                   });
                 }
                 currentAssistantId = null;
@@ -297,7 +516,10 @@ export const useChatStore = create<ChatState>()(
               });
             });
 
+            const chainStream = new EventSource(`${apiBase}/chain/stream`);
+
             const chainStream = new EventSource(`${apiBase}/api/v1/chain/stream`);
+
             chainStream.addEventListener("block", event => {
               const data = JSON.parse((event as MessageEvent).data);
               set(state => ({
@@ -305,6 +527,16 @@ export const useChatStore = create<ChatState>()(
                   {
                     id: data.id,
                     timestamp: data.timestamp,
+
+                    payload: data.payload
+                  },
+                  ...state.chain
+                ].slice(0, 50)
+              }));
+            });
+
+            set({ connected: true, chatStream, chainStream });
+
                     payload: data.payload,
                   },
                   ...state.chain,
@@ -318,6 +550,7 @@ export const useChatStore = create<ChatState>()(
             };
 
             set({ chatStream, chainStream });
+
           })
           .catch(error => {
             console.error("Kolibri chat stream connection failed", error);
@@ -335,7 +568,11 @@ export const useChatStore = create<ChatState>()(
         set(state => ({ messages: [...state.messages, message] }));
         try {
           const apiBase = await ensureApiBase();
+
+          await fetch(`${apiBase}/chat`, {
+
           await fetch(`${apiBase}/api/v1/chat`, {
+
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ session_id: sessionId, message: content }),
