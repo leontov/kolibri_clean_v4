@@ -23,8 +23,9 @@ int rb_payload_json(const ReasonBlock* b, char* buf, size_t n){
                     fesc, b->eff, b->compl);
     off += snprintf(buf+off, n-off, "\"prev\":\"%s\",\"votes\":[", b->prev);
     for(int i=0;i<10;i++){
-        off += snprintf(buf+off, n-off, "%.17g%s", b->votes[i], (i<9)?",":"]}");
+        off += snprintf(buf+off, n-off, "%.17g%s", b->votes[i], (i<9)?",":"]");
     }
+    off += snprintf(buf+off, n-off, "}");
     if(off<0 || (size_t)off>=n) return -1;
     return off;
 }
