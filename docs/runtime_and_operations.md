@@ -70,21 +70,59 @@
 
 Для интеграции Python-компонентов используйте `KolibriRuntime`:
 
-```python
+-```python
 from kolibri_x.runtime.orchestrator import KolibriRuntime, RuntimeRequest
 from kolibri_x.runtime.orchestrator import SkillSandbox
 
 sandbox = SkillSandbox()
-sandbox.register("echo", lambda payload: {"text": payload["text"].upper()})
+sandbox.register("echo", lambda payload: {"text": payload["goal"].upper()})
 
 runtime = KolibriRuntime(sandbox=sandbox)
-response = runtime.execute(RuntimeRequest(user_id="demo", goal="echo", modalities={"text": "hello"}))
-print(response.answer)
+runtime.privacy.grant("demo", ["text"])
+response = runtime.process(
+    RuntimeRequest(user_id="demo", goal="echo", modalities={"text": "hello"})
+)
+print(response.answer["summary"])
 ```
 
 - Конфигурация runtime описана в [architecture](architecture.md).
 - Все внешние навыки должны регистрироваться в `SkillStore` или напрямую в
-  `SkillSandbox` (для тестов).
+  `SkillSandbox` (для тестов). Перед первым запросом выдавайте пользователю
+  разрешения на необходимые модальности через `runtime.privacy.grant`.
+
+### Консольный чат
+
+1. Активируйте Python-окружение с установленным пакетом `kolibri_x`
+   (например, `pip install -e .`).
+2. Запустите CLI, указав идентификатор пользователя, которому нужно выдать
+   доступ к текстовой модальности:
+
+   ```bash
+   python -m kolibri_x.cli.chat --user-id demo
+   ```
+
+3. При необходимости передайте аргумент `--knowledge`, чтобы сразу загрузить
+   документы в граф знаний до начала диалога. CLI принимает как путь к файлу,
+   так и директорию:
+
+   ```bash
+   python -m kolibri_x.cli.chat --user-id demo --knowledge docs/primer.txt
+   ```
+
+4. После запуска введите сообщение — runtime сформирует план, выполнит
+   sandbox-навык по умолчанию и покажет суммарный ответ. Доступны специальные
+   команды:
+
+   - `:journal` — вывести последние события `ActionJournal`.
+   - `:reason` — распечатать `ReasoningLog` текущего ответа в формате JSON.
+   - `:quit` — завершить сессию.
+
+   Все команды работают в одном цикле, поэтому можно чередовать пользовательские
+   сообщения и отладочные запросы.
+
+По умолчанию CLI регистрирует sandbox-навык `chat_responder` без дополнительных
+разрешений. При необходимости замените обработчик в `kolibri_x/cli/chat.py`,
+чтобы перенаправлять запросы в собственные навыки или внешние сервисы.
 
 ## Офлайн-режим
 
