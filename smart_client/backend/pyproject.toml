@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kolibri-smart-client"
+version = "0.1.0"
+description = "Kolibri smart client orchestrator service"
+authors = [
+    {name = "Kolibri Team"}
+]
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.110.0",
+    "uvicorn>=0.27.0",
+    "pydantic>=2.6.1",
+    "sse-starlette>=1.8.2",
+    "aiofiles>=23.1.0"
+]
+
+[project.optional-dependencies]
+dev = [
+    "httpx>=0.26.0",
+    "pytest>=8.0.0"
+]
+
+[tool.setuptools.packages.find]
+where = ["app"]
