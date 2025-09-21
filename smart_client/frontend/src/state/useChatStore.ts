@@ -51,8 +51,15 @@ const randomId = () => {
 
 const API_BASE = resolveApiBase();
 
+const KNOWN_APP_ROUTES = new Set(["chat", "ledger", "settings"]);
+
+function resolveApiBase(): string {
+  const fromEnv = normalizeBase(import.meta.env.VITE_API_BASE ?? "");
+
+
 function resolveApiBase(): string {
   const fromEnv = trimTrailingSlash(import.meta.env.VITE_API_BASE ?? "");
+
   if (fromEnv) {
     return fromEnv;
   }
@@ -65,7 +72,11 @@ function resolveApiBase(): string {
     __KOLIBRI_API_BASE__?: string;
     __kolibriApiBase?: string;
   };
+
+  const globalBase = normalizeBase(
+
   const globalBase = trimTrailingSlash(
+
     globalWithApiBase.__KOLIBRI_API_BASE__ ?? globalWithApiBase.__kolibriApiBase ?? ""
   );
   if (globalBase) {
@@ -73,10 +84,54 @@ function resolveApiBase(): string {
   }
 
   const meta = document.querySelector('meta[name="kolibri-api-base"]')?.getAttribute("content") ?? "";
+
+  const metaBase = normalizeBase(meta);
+
   const metaBase = trimTrailingSlash(meta);
+
   if (metaBase) {
     return metaBase;
   }
+
+  return inferBaseFromLocation();
+}
+
+function normalizeBase(value: string): string {
+  const trimmed = value.trim().replace(/\/+$/, "");
+  if (!trimmed) {
+    return "";
+  }
+  if (/^(?:[a-z]+:)?\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+}
+
+function inferBaseFromLocation(): string {
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  const trimmedPath = window.location.pathname.replace(/\/+$/, "");
+  if (!trimmedPath || trimmedPath === "/") {
+    return "";
+  }
+
+  const segments = trimmedPath.split("/").filter(Boolean);
+  if (segments.length === 0) {
+    return "";
+  }
+
+  const lastSegment = segments[segments.length - 1];
+  if (lastSegment.includes(".") || KNOWN_APP_ROUTES.has(lastSegment)) {
+    segments.pop();
+  }
+
+  if (segments.length === 0) {
+    return "";
+  }
+
+  return `/${segments.join("/")}`;
 
   const { pathname } = window.location;
   const segments = pathname.split("/");
@@ -98,6 +153,7 @@ function resolveApiBase(): string {
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
+
 }
 
 export const useChatStore = create<ChatState>()(
