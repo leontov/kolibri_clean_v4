@@ -21,7 +21,7 @@ bool chain_append(const char* path, const ReasonBlock* b){
     char payload[4096]; int m = rb_payload_json(b, payload, sizeof(payload));
     if(m<0){ fclose(f); return false; }
 
-    char keybuf[256]; const char* k = getenv("KOLIBRI_HMAC_KEY");
+    const char* k = getenv("KOLIBRI_HMAC_KEY");
     if(!k){ k = "insecure-key"; }
     // hash/hmac over EXACT payload bytes
     char hash[65], hmac_hex[65];
@@ -46,22 +46,40 @@ bool chain_load(const char* path, ReasonBlock** out_arr, size_t* out_n){
         if(n==cap){ cap*=2; arr=(ReasonBlock*)realloc(arr,cap*sizeof(ReasonBlock)); }
         ReasonBlock* b=&arr[n]; memset(b,0,sizeof(*b));
         // naive parse
-        sscanf(line, "{\"step\":%llu", &b->step);
-        char* p=strstr(line,"\"parent\":"); if(p) sscanf(p,"\"parent\":%llu",&b->parent);
-        p=strstr(line,"\"seed\":"); if(p) sscanf(p,"\"seed\":%llu",&b->seed);
-        p=strstr(line,"\"eff\":"); if(p) sscanf(p,"\"eff\":%lf",&b->eff);
-        p=strstr(line,"\"compl\":"); if(p) sscanf(p,"\"compl\":%lf",&b->compl);
-        p=strstr(line,"\"prev\":\""); if(p) sscanf(p,"\"prev\":\"%64[^\"]\"", b->prev);
-        p=strstr(line,"\"hash\":\""); if(p) sscanf(p,"\"hash\":\"%64[0-9a-f]\"", b->hash);
-        p=strstr(line,"\"hmac\":\""); if(p) sscanf(p,"\"hmac\":\"%64[0-9a-f]\"", b->hmac);
+        unsigned long long tmp=0ULL;
+        if(sscanf(line, "{\"step\":%llu", &tmp)==1) b->step=(uint64_t)tmp;
+        char* p=strstr(line,"\"parent\":"); if(p && sscanf(p,"\"parent\":%llu",&tmp)==1) b->parent=(uint64_t)tmp;
+        p=strstr(line,"\"seed\":"); if(p && sscanf(p,"\"seed\":%llu",&tmp)==1) b->seed=(uint64_t)tmp;
+        p=strstr(line,"\"fmt\":\"");
+        if(p){ p+=strlen("\"fmt\":\""); size_t j=0; while(*p && *p!='"' && j<sizeof(b->fmt)-1){ if(*p=='\\'&&p[1]) p++; b->fmt[j++]=*p++; } b->fmt[j]=0; }
         p=strstr(line,"\"formula\":\"");
         if(p){
-            p+=11; size_t j=0;
+            p+=strlen("\"formula\":\""); size_t j=0;
             while(*p && *p!='"' && j<sizeof(b->formula)-1){
-                if(*p=='\\' && p[1]) p++; b->formula[j++]=*p++;
+                if(*p=='\\' && p[1]) p++;
+                b->formula[j++]=*p++;
             }
             b->formula[j]=0;
         }
+        p=strstr(line,"\"param_count\":"); if(p) sscanf(p,"\"param_count\":%d", &b->param_count);
+        if(b->param_count<0) b->param_count=0;
+        if(b->param_count>8) b->param_count=8;
+        p=strstr(line,"\"params\":[");
+        if(p){
+            p=strchr(p,'['); if(p) p++;
+            for(int i=0;i<b->param_count;i++){
+                while(*p==' '||*p=='\t') p++;
+                b->params[i]=strtod(p,&p);
+                while(*p && *p!=',' && *p!=']') p++;
+                if(*p==',') p++;
+            }
+        }
+        p=strstr(line,"\"eff\":"); if(p) sscanf(p,"\"eff\":%lf",&b->eff);
+        p=strstr(line,"\"compl\":"); if(p) sscanf(p,"\"compl\":%lf",&b->compl);
+        p=strstr(line,"\"prev\":\"");
+        if(p){ p+=strlen("\"prev\":\""); size_t j=0; while(*p && *p!='"' && j<sizeof(b->prev)-1){ if(*p=='\\'&&p[1]) p++; b->prev[j++]=*p++; } b->prev[j]=0; }
+        p=strstr(line,"\"hash\":\""); if(p) sscanf(p,"\"hash\":\"%64[0-9a-f]\"", b->hash);
+        p=strstr(line,"\"hmac\":\""); if(p) sscanf(p,"\"hmac\":\"%64[0-9a-f]\"", b->hmac);
         p=strstr(line,"\"votes\":[");
         if(p){
             p=strchr(p,'['); if(p) p++;
@@ -75,8 +93,66 @@ bool chain_load(const char* path, ReasonBlock** out_arr, size_t* out_n){
                 if(*p==']'){ for(int k=i+1;k<10;k++) b->votes[k]=0.0; break; }
             }
         }
+        p=strstr(line,"\"vote_softmax\":"); if(p) sscanf(p,"\"vote_softmax\":%lf", &b->vote_softmax);
+        p=strstr(line,"\"vote_median\":"); if(p) sscanf(p,"\"vote_median\":%lf", &b->vote_median);
+        p=strstr(line,"\"bench\":[");
+        if(p){
+            p=strchr(p,'['); if(p) p++;
+            for(int i=0;i<10;i++){
+                while(*p==' '||*p=='\t') p++;
+                char* e=NULL; double v=strtod(p,&e);
+                if(e==p){ for(;i<10;i++) b->bench_eff[i]=0.0; break; }
+                b->bench_eff[i]=v; p=e;
+                while(*p && *p!=',' && *p!=']') p++;
+                if(*p==',') p++;
+                if(*p==']'){ for(int k=i+1;k<10;k++) b->bench_eff[k]=0.0; break; }
+            }
+        }
+        p=strstr(line,"\"memory\":\"");
+        if(p){ p+=strlen("\"memory\":\""); size_t j=0; while(*p && *p!='"' && j<sizeof(b->memory)-1){ if(*p=='\\'&&p[1]) p++; b->memory[j++]=*p++; } b->memory[j]=0; }
+        p=strstr(line,"\"merkle\":\"");
+        if(p) sscanf(p,"\"merkle\":\"%64[0-9a-f]\"", b->merkle);
         n++;
     }
     fclose(f);
     *out_arr=arr; *out_n=n; return true;
+}
+
+bool chain_verify(const char* path, FILE* out){
+    ReasonBlock* arr=NULL; size_t n=0;
+    if(!chain_load(path,&arr,&n) || n==0){
+        if(out) fprintf(out,"No chain at %s\n", path);
+        free(arr);
+        return false;
+    }
+    const char* k = getenv("KOLIBRI_HMAC_KEY");
+    if(!k) k = "insecure-key";
+
+    char prev[65]={0};
+    for(size_t i=0;i<n;i++){
+        ReasonBlock* b = &arr[i];
+        if(strcmp(b->prev, prev)!=0){
+            if(out) fprintf(out, "prev mismatch at step %llu\n", (unsigned long long)b->step);
+            free(arr); return false;
+        }
+        char payload[4096]; int m = rb_payload_json(b, payload, sizeof(payload));
+        if(m<0){ free(arr); return false; }
+        char h[65], mac_hex[65];
+        sha256_hex((unsigned char*)payload, (size_t)m, h);
+        if(strncmp(h, b->hash, 64)!=0){
+            if(out) fprintf(out, "hash mismatch at step %llu\n", (unsigned long long)b->step);
+            free(arr); return false;
+        }
+        unsigned char* mac = HMAC(EVP_sha256(), k, (int)strlen(k),
+                                  (unsigned char*)payload, (size_t)m, NULL, NULL);
+        hex(mac, 32, mac_hex);
+        if(strncmp(mac_hex, b->hmac, 64)!=0){
+            if(out) fprintf(out, "hmac mismatch at step %llu\n", (unsigned long long)b->step);
+            free(arr); return false;
+        }
+        strncpy(prev, h, 65);
+    }
+    if(out) fprintf(out, "OK: chain verified (%zu blocks)\n", n);
+    free(arr);
+    return true;
 }

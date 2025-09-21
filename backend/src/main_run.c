@@ -29,5 +29,9 @@ int main(int argc, char** argv){
                step, b.eff, b.compl, b.formula, hash);
         strncpy(prev, hash, 65);
     }
+    if(!chain_verify("logs/chain.jsonl", stdout)){
+        fprintf(stderr, "self-check verification failed\n");
+        return 1;
+    }
     return 0;
 }

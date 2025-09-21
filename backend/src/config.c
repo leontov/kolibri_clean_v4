@@ -18,7 +18,10 @@ bool kolibri_load_config(kolibri_config_t* c, const char* json_path){
     if(!f) return true;
     fseek(f,0,SEEK_END); long n=ftell(f); fseek(f,0,SEEK_SET);
     char* buf=(char*)malloc(n+1); if(!buf){ fclose(f); return true; }
-    fread(buf,1,n,f); buf[n]=0; fclose(f);
+    size_t readn=fread(buf,1,(size_t)n,f);
+    fclose(f);
+    if(readn!=(size_t)n){ free(buf); return true; }
+    buf[n]=0;
     char* p=buf;
     #define GETI(k,dst) do{ char* q=strstr(p,k); if(q){ q=strchr(q,':'); if(q){ dst=atoi(q+1);} } }while(0)
     #define GETD(k,dst) do{ char* q=strstr(p,k); if(q){ q=strchr(q,':'); if(q){ dst=atof(q+1);} } }while(0)
