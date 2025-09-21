@@ -21,19 +21,20 @@ LDFLAGS := $(OPENSSL_LIBS) -lm
 SRC := backend/src
 BIN_DIR := bin
 BINS := $(BIN_DIR)/kolibri_run $(BIN_DIR)/kolibri_verify $(BIN_DIR)/kolibri_replay
+COMMON_OBJS := $(SRC)/digit_agents.c $(SRC)/vote_aggregate.c
 
 all: $(BIN_DIR) $(BINS)
 
 $(BIN_DIR):
 	@mkdir -p $(BIN_DIR)
 
-$(BIN_DIR)/kolibri_run: $(SRC)/main_run.c $(SRC)/core.c $(SRC)/dsl.c $(SRC)/chainio.c $(SRC)/reason.c $(SRC)/config.c
+$(BIN_DIR)/kolibri_run: $(SRC)/main_run.c $(SRC)/core.c $(SRC)/dsl.c $(SRC)/chainio.c $(SRC)/reason.c $(SRC)/config.c $(COMMON_OBJS)
 	$(CC) $(CFLAGS) $(INCLUDE) $^ -o $@ $(LDFLAGS)
 
 $(BIN_DIR)/kolibri_verify: $(SRC)/main_verify.c $(SRC)/dsl.c $(SRC)/chainio.c $(SRC)/reason.c $(SRC)/config.c
 	$(CC) $(CFLAGS) $(INCLUDE) $^ -o $@ $(LDFLAGS)
 
-$(BIN_DIR)/kolibri_replay: $(SRC)/main_replay.c $(SRC)/core.c $(SRC)/dsl.c $(SRC)/chainio.c $(SRC)/reason.c $(SRC)/config.c
+$(BIN_DIR)/kolibri_replay: $(SRC)/main_replay.c $(SRC)/core.c $(SRC)/dsl.c $(SRC)/chainio.c $(SRC)/reason.c $(SRC)/config.c $(COMMON_OBJS)
 	$(CC) $(CFLAGS) $(INCLUDE) $^ -o $@ $(LDFLAGS)
 
 clean:
