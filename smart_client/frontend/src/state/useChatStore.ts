@@ -49,6 +49,12 @@ const randomId = () => {
   return Math.random().toString(36).slice(2);
 };
 
+
+const KNOWN_APP_ROUTES = new Set(["chat", "ledger", "settings"]);
+
+let resolvedApiBase: string | null = null;
+let resolvingApiBase: Promise<string> | null = null;
+
 const API_BASE = resolveApiBase();
 
 const KNOWN_APP_ROUTES = new Set(["chat", "ledger", "settings"]);
@@ -107,6 +113,19 @@ function normalizeBase(value: string): string {
   return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
+
+async function ensureApiBase(): Promise<string> {
+  if (resolvedApiBase !== null) {
+    return resolvedApiBase;
+  }
+  if (!resolvingApiBase) {
+    resolvingApiBase = resolveApiBase();
+  }
+  resolvedApiBase = await resolvingApiBase;
+  return resolvedApiBase;
+}
+
+
 function inferBaseFromLocation(): string {
   if (typeof window === "undefined") {
     return "";
@@ -133,6 +152,60 @@ function inferBaseFromLocation(): string {
 
   return `/${segments.join("/")}`;
 
+}
+
+async function resolveApiBase(): Promise<string> {
+  const candidates = resolveApiBaseCandidates();
+  for (const base of candidates) {
+    try {
+      const response = await fetch(`${base}/api/v1/status`, { method: "GET" });
+      if (response.ok) {
+        return base;
+      }
+    } catch (error) {
+      console.warn(`Kolibri API base candidate failed: ${base}`, error);
+    }
+  }
+  return candidates[candidates.length - 1] ?? "";
+}
+
+function resolveApiBaseCandidates(): string[] {
+  const candidates: string[] = [];
+
+  const addCandidate = (value: string) => {
+    if (!value || candidates.includes(value)) {
+      return;
+    }
+    candidates.push(value);
+  };
+
+  addCandidate(normalizeBase(import.meta.env.VITE_API_BASE ?? ""));
+
+  if (typeof window !== "undefined") {
+    const globalWithApiBase = window as Window & {
+      __KOLIBRI_API_BASE__?: string;
+      __kolibriApiBase?: string;
+    };
+    addCandidate(
+      normalizeBase(
+        globalWithApiBase.__KOLIBRI_API_BASE__ ?? globalWithApiBase.__kolibriApiBase ?? ""
+      )
+    );
+
+    const meta = document
+      .querySelector('meta[name="kolibri-api-base"]')
+      ?.getAttribute("content");
+    addCandidate(normalizeBase(meta ?? ""));
+
+    addCandidate(normalizeBase(import.meta.env.BASE_URL ?? ""));
+    addCandidate(inferBaseFromLocation());
+  }
+
+  addCandidate("");
+
+  return candidates;
+
+
   const { pathname } = window.location;
   const segments = pathname.split("/");
   if (segments.length <= 1) {
@@ -153,6 +226,7 @@ function inferBaseFromLocation(): string {
 
 function trimTrailingSlash(value: string): string {
   return value.replace(/\/+$/, "");
+
 
 }
 
@@ -177,92 +251,99 @@ export const useChatStore = create<ChatState>()(
         existingChatStream?.close();
         existingChainStream?.close();
 
-        const chatStream = new EventSource(
-          `${API_BASE}/api/v1/chat/stream?session_id=${sessionId}`
-        );
-        chatStream.onmessage = () => {};
-        let currentAssistantId: string | null = null;
-        chatStream.addEventListener("token", event => {
-          const data = JSON.parse((event as MessageEvent).data) as { content: string };
-          set(state => {
-            const messages = [...state.messages];
-            if (!currentAssistantId) {
-              currentAssistantId = randomId();
-              messages.push({
-                id: currentAssistantId,
-                role: "assistant",
-                content: "",
-                pending: true
+        void ensureApiBase()
+          .then(apiBase => {
+            const chatStream = new EventSource(
+              `${apiBase}/api/v1/chat/stream?session_id=${sessionId}`
+            );
+            chatStream.onmessage = () => {};
+            let currentAssistantId: string | null = null;
+            chatStream.addEventListener("token", event => {
+              const data = JSON.parse((event as MessageEvent).data) as { content: string };
+              set(state => {
+                const messages = [...state.messages];
+                if (!currentAssistantId) {
+                  currentAssistantId = randomId();
+                  messages.push({
+                    id: currentAssistantId,
+                    role: "assistant",
+                    content: "",
+                    pending: true
+                  });
+                }
+                const idx = messages.findIndex(msg => msg.id === currentAssistantId);
+                if (idx >= 0) {
+                  messages[idx] = {
+                    ...messages[idx],
+                    content: `${messages[idx].content}${data.content}`
+                  };
+                }
+                return { messages };
               });
-            }
-            const idx = messages.findIndex(msg => msg.id === currentAssistantId);
-            if (idx >= 0) {
-              messages[idx] = {
-                ...messages[idx],
-                content: `${messages[idx].content}${data.content}`
-              };
-            }
-            return { messages };
-          });
-        });
-        chatStream.addEventListener("tool_call", event => {
-          const data = JSON.parse((event as MessageEvent).data);
-          set(state => ({
-            messages: [
-              ...state.messages,
-              {
-                id: randomId(),
-                role: "tool",
-                content: JSON.stringify(data, null, 2),
-                toolName: data.name
-              }
-            ]
-          }));
-        });
-        chatStream.addEventListener("final", event => {
-          const data = JSON.parse((event as MessageEvent).data) as { content: string };
-          set(state => {
-            const messages = [...state.messages];
-            if (currentAssistantId) {
-              const idx = messages.findIndex(msg => msg.id === currentAssistantId);
-              if (idx >= 0) {
-                messages[idx] = {
-                  ...messages[idx],
-                  content: data.content,
-                  pending: false,
-                  sources: extractSources(data.content)
-                };
-              }
-            } else {
-              messages.push({
-                id: randomId(),
-                role: "assistant",
-                content: data.content,
-                pending: false,
-                sources: extractSources(data.content)
+            });
+            chatStream.addEventListener("tool_call", event => {
+              const data = JSON.parse((event as MessageEvent).data);
+              set(state => ({
+                messages: [
+                  ...state.messages,
+                  {
+                    id: randomId(),
+                    role: "tool",
+                    content: JSON.stringify(data, null, 2),
+                    toolName: data.name
+                  }
+                ]
+              }));
+            });
+            chatStream.addEventListener("final", event => {
+              const data = JSON.parse((event as MessageEvent).data) as { content: string };
+              set(state => {
+                const messages = [...state.messages];
+                if (currentAssistantId) {
+                  const idx = messages.findIndex(msg => msg.id === currentAssistantId);
+                  if (idx >= 0) {
+                    messages[idx] = {
+                      ...messages[idx],
+                      content: data.content,
+                      pending: false,
+                      sources: extractSources(data.content)
+                    };
+                  }
+                } else {
+                  messages.push({
+                    id: randomId(),
+                    role: "assistant",
+                    content: data.content,
+                    pending: false,
+                    sources: extractSources(data.content)
+                  });
+                }
+                currentAssistantId = null;
+                return { messages };
               });
-            }
-            currentAssistantId = null;
-            return { messages };
+            });
+
+            const chainStream = new EventSource(`${apiBase}/api/v1/chain/stream`);
+            chainStream.addEventListener("block", event => {
+              const data = JSON.parse((event as MessageEvent).data);
+              set(state => ({
+                chain: [
+                  {
+                    id: data.id,
+                    timestamp: data.timestamp,
+                    payload: data.payload
+                  },
+                  ...state.chain
+                ].slice(0, 50)
+              }));
+            });
+
+            set({ connected: true, chatStream, chainStream });
+          })
+          .catch(error => {
+            console.error("Kolibri chat stream connection failed", error);
+            set({ connected: false, chatStream: null, chainStream: null });
           });
-        });
-
-        const chainStream = new EventSource(`${API_BASE}/api/v1/chain/stream`);
-        chainStream.addEventListener("block", event => {
-          const data = JSON.parse((event as MessageEvent).data);
-          set(state => ({
-            chain: [
-              {
-                id: data.id,
-                timestamp: data.timestamp,
-                payload: data.payload
-              },
-              ...state.chain
-            ].slice(0, 50)
-          }));
-        });
-
-        set({ connected: true, chatStream, chainStream });
       },
       sendMessage: async content => {
         const { sessionId } = get();
@@ -274,7 +355,8 @@ export const useChatStore = create<ChatState>()(
         };
         set(state => ({ messages: [...state.messages, message] }));
         try {
-          await fetch(`${API_BASE}/api/v1/chat`, {
+          const apiBase = await ensureApiBase();
+          await fetch(`${apiBase}/api/v1/chat`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ session_id: sessionId, message: content })
@@ -285,6 +367,7 @@ export const useChatStore = create<ChatState>()(
               msg.id === message.id ? { ...msg, pending: true } : msg
             )
           }));
+          console.error("Kolibri chat request failed", error);
         }
       },
       setView: view => set({ activeView: view }),
