@@ -22,7 +22,7 @@ SRC := backend/src
 BIN_DIR := bin
 BINS := $(BIN_DIR)/kolibri_run $(BIN_DIR)/kolibri_verify $(BIN_DIR)/kolibri_replay
 
-TEST_BIN := $(BIN_DIR)/reason_payload_test
+TEST_BINS := $(BIN_DIR)/reason_payload_test $(BIN_DIR)/bench_validation_test
 
 COMMON_OBJS := $(SRC)/digit_agents.c $(SRC)/vote_aggregate.c
 
@@ -52,12 +52,16 @@ $(BIN_DIR)/kolibri_replay: $(SRC)/main_replay.c $(SRC)/core.c $(SRC)/dsl.c $(SRC
 $(BIN_DIR)/test_vote: backend/tests/test_vote.c $(SRC)/digit_agents.c $(SRC)/vote_aggregate.c
 	$(CC) $(CFLAGS) $(INCLUDE) $^ -o $@ $(LDFLAGS)
 
-$(TEST_BIN): backend/tests/reason_payload_test.c $(SRC)/reason.c
+$(BIN_DIR)/reason_payload_test: backend/tests/reason_payload_test.c $(SRC)/reason.c
+	$(CC) $(CFLAGS) $(INCLUDE) $^ -o $@ $(LDFLAGS)
+
+$(BIN_DIR)/bench_validation_test: backend/tests/bench_validation_test.c $(SRC)/reason.c
 	$(CC) $(CFLAGS) $(INCLUDE) $^ -o $@ $(LDFLAGS)
 
 .PHONY: tests
-tests: $(BIN_DIR) $(TEST_BIN)
+tests: $(BIN_DIR) $(TEST_BINS)
 	python3 tests/test_reason_payload.py
+	$(BIN_DIR)/bench_validation_test
 
 .PHONY: test
 test: $(BIN_DIR)/test_vote

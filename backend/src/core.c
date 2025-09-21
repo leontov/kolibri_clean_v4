@@ -4,9 +4,6 @@
 
 #include "digit_agents.h"
 #include "vote_aggregate.h"
-#include <stdbool.h>
-
-#include "vote_aggregate.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -352,14 +349,6 @@ static Formula* propose_formula(const VoteState* state, uint64_t seed){
         default:
             return f_const(-2+4*state->vote[4]);
 
-        case 0: return f_add(f_x(), f_sin(f_x()));
-        case 1: return f_sigmoid(f_add(f_param(0), f_mul(f_param(1), f_x())));
-        case 2: return f_add(f_mul(f_const(-2+4*vote[0]), f_sin(f_x())),
-                             f_mul(f_const(-1+2*vote[1]), f_x()));
-        case 3: return f_max(f_abs(f_x()), f_const(vote[2]));
-        case 4: return f_add(f_exp(f_mul(f_const(0.2), f_x())), f_param(2));
-        default: return f_tanh(f_add(f_param(0), f_mul(f_param(1), f_x())));
-
     }
 }
 
@@ -382,55 +371,26 @@ bool kolibri_step(const kolibri_config_t* cfg, int step, const char* prev_hash,
     digit_aggregate(&g_digit_field, &vote_state);
     vote_state.temperature = cfg->temperature;
 
-    VotePolicy policy = { cfg->depth_decay, cfg->quorum };
+    VotePolicy policy = vote_policy_from_config(cfg);
     vote_apply_policy(&vote_state, &policy);
 
     for (int i = 0; i < 10; ++i) {
         out->votes[i] = vote_state.vote[i];
-
-    uint64_t s=out->seed;
-    for(int i=0;i<10;i++){
-        double r = prng01(&s);
-        out->votes[i] = 0.5 + 0.5*cos(step*0.17 + r*6.28318);
-        if(out->votes[i] < cfg->quorum) out->votes[i]=0.0;
-
     }
     out->vote_softmax = vote_softmax_avg(out->votes, cfg->temperature);
     out->vote_median = vote_weighted_median(out->votes);
 
-    VotePolicy policy = vote_policy_from_config(cfg);
-
-    int depth_max = cfg->depth_max;
-    if(depth_max <= 0) depth_max = 1;
-
-    double (*depth_votes)[10] = calloc((size_t)depth_max, sizeof(*depth_votes));
-    if(depth_votes){
-        uint64_t s = out->seed;
-        for(int depth = 0; depth < depth_max; ++depth){
-            for(int i = 0; i < 10; ++i){
-                double r = prng01(&s);
-                depth_votes[depth][i] = 0.5 + 0.5*cos((step + depth)*0.17 + r*6.28318);
-            }
-        }
-
-        digit_aggregate(out->votes, &policy, (const double (*)[10])depth_votes,
-                        (size_t)depth_max);
-        free(depth_votes);
-    }
-    vote_apply_policy(out->votes, &policy);
-
-
     Formula* f = propose_formula(&vote_state, out->seed);
-    out->eff = eff_of(f);
-    out->compl = (double)f_complexity(f);
-
-    Formula* f = propose(out->votes, out->seed);
     EvalResult er = evaluate_formula(f);
     out->eff = er.eff;
     out->compl = er.compl;
     out->param_count = (int)er.param_count;
-    for(size_t i=0;i<er.param_count;i++) out->params[i]=er.params[i];
-    for(size_t i=0;i<BENCH_COUNT;i++) out->bench_eff[i]=er.bench_eff[i];
+    for (size_t i = 0; i < er.param_count; ++i) {
+        out->params[i] = er.params[i];
+    }
+    for (size_t i = 0; i < BENCH_COUNT; ++i) {
+        out->bench_eff[i] = er.bench_eff[i];
+    }
 
     f_render(f, out->formula, sizeof(out->formula));
 
