@@ -27,7 +27,12 @@ from kolibri_x.eval.active_learning import ActiveLearner, CandidateExample  # no
 from kolibri_x.eval.missions import Mission, MissionPack  # noqa: E402
 from kolibri_x.eval.mksi import compute_metrics, metrics_report  # noqa: E402
 from kolibri_x.kg.graph import Edge, KnowledgeGraph, Node, VerificationResult  # noqa: E402
-from kolibri_x.kg.ingest import KnowledgeDocument, KnowledgeIngestor  # noqa: E402
+from kolibri_x.kg.ingest import (  # noqa: E402
+    DomainImportPipeline,
+    DomainRecord,
+    KnowledgeDocument,
+    KnowledgeIngestor,
+)
 from kolibri_x.kg.rag import RAGPipeline  # noqa: E402
 from kolibri_x.personalization import (  # noqa: E402
     Achievement,
@@ -149,6 +154,136 @@ def test_rag_pipeline_returns_supported_answer(knowledge_graph: KnowledgeGraph) 
     assert reasoning.steps(), "reasoning log should not be empty"
 
 
+def test_graph_hybrid_memory_and_verification(knowledge_graph: KnowledgeGraph) -> None:
+    knowledge_graph.register_critic("length", lambda node: min(1.0, len(node.text.split()) / 12))
+    knowledge_graph.register_authority(
+        "sources",
+        lambda node: {"score": 1.0 if node.sources else 0.3, "source_count": len(node.sources)},
+    )
+
+    knowledge_graph.add_node(
+        Node(
+            id="metric:latency",
+            type="Metric",
+            text="Average latency stays below the adaptive threshold",
+            sources=["https://kolibri.example/perf"],
+            confidence=0.72,
+            embedding=[0.1, 0.2, 0.3],
+            memory="operational",
+        )
+    )
+    knowledge_graph.add_node(
+        Node(
+            id="metric:latency:duplicate",
+            type="Metric",
+            text="Average latency stays below the adaptive threshold",
+            sources=["https://kolibri.example/perf"],
+            confidence=0.68,
+            embedding=[0.1, 0.2, 0.3],
+            memory="operational",
+        )
+    )
+    knowledge_graph.add_edge(
+        Edge(
+            source="metric:latency",
+            target="entity:skillstore",
+            relation="supports",
+            weight=0.4,
+        )
+    )
+    knowledge_graph.promote_node("metric:latency")
+
+    results = knowledge_graph.verify_with_critics({})
+    assert any(result.provenance == "authority" for result in results)
+    node = knowledge_graph.get_node("metric:latency")
+    assert node is not None and node.metadata.get("verification_score", 0.0) > 0
+
+    duplicates = knowledge_graph.deduplicate_embeddings()
+    assert any({"metric:latency", "metric:latency:duplicate"} == set(pair) for pair in duplicates)
+    assert knowledge_graph.get_node("metric:latency") is not None
+    assert knowledge_graph.get_node("metric:latency:duplicate") is None
+
+
+def test_graph_lazy_updates_and_conflict_clarifications(knowledge_graph: KnowledgeGraph) -> None:
+    knowledge_graph.add_node(
+        Node(
+            id="claim:reliable",
+            type="Claim",
+            text="Kolibri runtime is reliable",
+            sources=["https://kolibri.example/reliability"],
+            confidence=0.7,
+        )
+    )
+    knowledge_graph.add_node(
+        Node(
+            id="claim:reliable:not",
+            type="Claim",
+            text="Kolibri runtime is not reliable",
+            sources=["https://kolibri.example/issues"],
+            confidence=0.6,
+        )
+    )
+    knowledge_graph.add_edge(
+        Edge(
+            source="claim:reliable",
+            target="claim:reliable:not",
+            relation="contradicts",
+            weight=0.5,
+        )
+    )
+
+    knowledge_graph.lazy_update("claim:reliable", confidence=0.9, metadata={"reviewed_by": "qa"})
+    processed = knowledge_graph.propagate_pending()
+    assert "claim:reliable" in processed
+    updated = knowledge_graph.get_node("claim:reliable")
+    assert updated is not None and updated.confidence == 0.9
+    neighbour = knowledge_graph.get_node("claim:reliable:not")
+    assert neighbour is not None and "pending_backprop" in neighbour.metadata
+
+    conflicts = knowledge_graph.detect_conflicts()
+    assert ("claim:reliable", "claim:reliable:not") in conflicts or (
+        "claim:reliable:not",
+        "claim:reliable",
+    ) in conflicts
+    requests = knowledge_graph.generate_clarification_requests()
+    assert any({"claim:reliable", "claim:reliable:not"} == set(request["pair"]) for request in requests)
+
+
+def test_dialogue_compression_and_causal_links(knowledge_graph: KnowledgeGraph) -> None:
+    utterances = [
+        "User: Outline the launch plan for Kolibri",
+        "Assistant: Therefore we should assign responsibilities",
+        "User: So the plan stays on schedule",
+    ]
+    compressed = knowledge_graph.compress_dialogue(utterances, session_id="sess-42")
+    assert compressed["events"] and compressed["summary"].startswith("3 events")
+    assert compressed["causal_links"], "causal links should capture shared plan topics"
+    first_link = compressed["causal_links"][0]
+    assert {"cause", "effect", "prediction"} <= set(first_link)
+
+
+def test_domain_import_pipeline_creates_typed_nodes(knowledge_graph: KnowledgeGraph) -> None:
+    pipeline = DomainImportPipeline(encoder=TextEncoder(dim=8))
+    records = [
+        DomainRecord(
+            identifier="account-1",
+            source="crm",
+            payload={"name": "Acme Corp", "type": "account", "status": "active"},
+        ),
+        DomainRecord(
+            identifier="renewal-1",
+            source="crm",
+            payload={"title": "Renewal", "date": "2025-06-01", "value": 125000},
+        ),
+    ]
+    report = pipeline.import_records(records, knowledge_graph)
+    assert report.nodes_added >= 2
+    assert "Account" in report.types
+    long_term_nodes = knowledge_graph.nodes(level="long_term")
+    assert any(node.id == "record:account-1" for node in long_term_nodes)
+    assert any(edge.relation == "describes" for edge in knowledge_graph.edges(level="long_term"))
+
+
 def test_privacy_operator_controls_access() -> None:
     operator = PrivacyOperator()
     operator.register_layer(PolicyLayer(name="baseline", scope={"text"}, default_action="allow"))
@@ -244,12 +379,13 @@ def test_knowledge_graph_verification_and_compression() -> None:
     graph.add_edge(Edge(source="a", target="b", relation="contradicts"))
     duplicates = graph.deduplicate_embeddings()
     assert duplicates
+    graph.register_authority("source-check", lambda node: 1.0 if node.sources else 0.0)
     results = graph.verify_with_critics({"critic": lambda node: node.confidence})
     assert all(isinstance(result, VerificationResult) for result in results)
     summary = graph.compress_dialogue(["Discuss project", "Resolve blockers"], "sess")
-    assert summary["events"]
-    queries = graph.conflict_queries()
-    assert queries
+    assert summary["events"] and summary["summary"].startswith("2 events")
+    assert "sess" == summary["session"]
+    assert isinstance(graph.generate_clarification_requests(), list)
 
 
 def test_profiler_and_empathy_modulation() -> None:
