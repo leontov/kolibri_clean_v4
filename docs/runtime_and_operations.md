@@ -79,7 +79,9 @@ sandbox.register("echo", lambda payload: {"text": payload["goal"].upper()})
 
 runtime = KolibriRuntime(sandbox=sandbox)
 runtime.privacy.grant("demo", ["text"])
-response = runtime.process(RuntimeRequest(user_id="demo", goal="echo", modalities={"text": "hello"}))
+response = runtime.process(
+    RuntimeRequest(user_id="demo", goal="echo", modalities={"text": "hello"})
+)
 print(response.answer["summary"])
 ```
 
@@ -90,16 +92,37 @@ print(response.answer["summary"])
 
 ### Консольный чат
 
-- Для быстрой проверки региструйте sandbox-навыки через новый CLI:
+1. Активируйте Python-окружение с установленным пакетом `kolibri_x`
+   (например, `pip install -e .`).
+2. Запустите CLI, указав идентификатор пользователя, которому нужно выдать
+   доступ к текстовой модальности:
 
-  ```bash
-  python -m kolibri_x.cli.chat --user-id demo
-  ```
+   ```bash
+   python -m kolibri_x.cli.chat --user-id demo
+   ```
 
-- Поддерживаются команды `:journal`, `:reason`, `:quit`. Команда `:journal`
-  выводит последние события `ActionJournal`, `:reason` — текущий `ReasoningLog`.
-  Перед запуском можно прогрузить знания в граф аргументом
-  `--knowledge path/to/file_or_dir`.
+3. При необходимости передайте аргумент `--knowledge`, чтобы сразу загрузить
+   документы в граф знаний до начала диалога. CLI принимает как путь к файлу,
+   так и директорию:
+
+   ```bash
+   python -m kolibri_x.cli.chat --user-id demo --knowledge docs/primer.txt
+   ```
+
+4. После запуска введите сообщение — runtime сформирует план, выполнит
+   sandbox-навык по умолчанию и покажет суммарный ответ. Доступны специальные
+   команды:
+
+   - `:journal` — вывести последние события `ActionJournal`.
+   - `:reason` — распечатать `ReasoningLog` текущего ответа в формате JSON.
+   - `:quit` — завершить сессию.
+
+   Все команды работают в одном цикле, поэтому можно чередовать пользовательские
+   сообщения и отладочные запросы.
+
+По умолчанию CLI регистрирует sandbox-навык `chat_responder` без дополнительных
+разрешений. При необходимости замените обработчик в `kolibri_x/cli/chat.py`,
+чтобы перенаправлять запросы в собственные навыки или внешние сервисы.
 
 ## Офлайн-режим
 
