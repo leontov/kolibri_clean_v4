@@ -60,6 +60,7 @@ class RAGPipeline:
 
     def verify_sources(self, support: Iterable[Mapping[str, object]]) -> Mapping[str, object]:
         missing = []
+
         conflicts = []
         conflicting_nodes = set()
         for source, target in self.graph.detect_conflicts():
@@ -82,10 +83,17 @@ class RAGPipeline:
                 "confidence": 0.1,
                 "message": f"conflicting evidence detected for {len(conflicts)} facts",
             }
+
+        for item in support:
+            sources = item.get("sources", [])
+            if not sources:
+                missing.append(item.get("id"))
+
         if missing:
             return {
                 "status": "partial",
                 "missing": missing,
+
                 "conflicts": conflicts,
                 "confidence": 0.2,
                 "message": f"missing sources for {len(missing)} facts",
@@ -97,6 +105,12 @@ class RAGPipeline:
             "confidence": 0.9,
             "message": "all facts have sources",
         }
+
+                "confidence": 0.2,
+                "message": f"missing sources for {len(missing)} facts",
+            }
+        return {"status": "ok", "missing": [], "confidence": 0.9, "message": "all facts have sources"}
+
 
     @staticmethod
     def _dot(left: List[float], right: List[float]) -> float:

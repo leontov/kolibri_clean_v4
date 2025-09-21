@@ -1,3 +1,4 @@
+
 """Knowledge graph with multi-tier storage and fact verification."""
 from __future__ import annotations
 
@@ -9,6 +10,15 @@ from pathlib import Path
 from statistics import fmean
 from typing import Callable, Dict, Iterable, Iterator, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
+"""Lightweight knowledge graph implementation for the Kolibri-x MVP."""
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+import json
+from pathlib import Path
+from typing import Dict, Iterable, Iterator, List, Mapping, MutableMapping, Optional, Sequence, Tuple
+
+
 
 @dataclass
 class Node:
@@ -18,8 +28,10 @@ class Node:
     sources: List[str] = field(default_factory=list)
     confidence: float = 1.0
     metadata: MutableMapping[str, object] = field(default_factory=dict)
+
     tier: str = "hot"
     embedding: Optional[List[float]] = None
+
 
     def to_dict(self) -> Mapping[str, object]:
         return {
@@ -29,8 +41,10 @@ class Node:
             "sources": list(self.sources),
             "confidence": self.confidence,
             "metadata": dict(self.metadata),
+
             "tier": self.tier,
             "embedding": list(self.embedding) if self.embedding else None,
+
         }
 
 
@@ -63,25 +77,36 @@ class VerificationResult:
 class KnowledgeGraph:
     """Stores facts across hot/warm/cold tiers with conflict detection."""
 
+
+class KnowledgeGraph:
+
     def __init__(self) -> None:
         self._nodes: Dict[str, Node] = {}
         self._edges: List[Edge] = []
         self._adjacency: Dict[str, List[Edge]] = {}
+
         self._tiers: Dict[str, List[str]] = {"hot": [], "warm": [], "cold": []}
 
     def add_node(self, node: Node) -> None:
         tier = node.tier if node.tier in self._tiers else "hot"
+
+
+    def add_node(self, node: Node) -> None:
+
         if node.id in self._nodes:
             existing = self._nodes[node.id]
             existing.text = node.text or existing.text
             existing.confidence = max(existing.confidence, node.confidence)
             existing.metadata.update(node.metadata)
+
             existing.embedding = node.embedding or existing.embedding
             existing.tier = tier
+
             for source in node.sources:
                 if source not in existing.sources:
                     existing.sources.append(source)
         else:
+
             node.tier = tier
             self._nodes[node.id] = node
             self._tiers.setdefault(tier, []).append(node.id)
@@ -98,6 +123,11 @@ class KnowledgeGraph:
         self._tiers[target_tier].append(node_id)
         self._nodes[node_id].tier = target_tier
 
+
+            self._nodes[node.id] = node
+        self._adjacency.setdefault(node.id, [])
+
+
     def add_edge(self, edge: Edge) -> None:
         if edge.source not in self._nodes or edge.target not in self._nodes:
             raise KeyError("both endpoints must exist before adding an edge")
@@ -113,14 +143,20 @@ class KnowledgeGraph:
             return list(edges)
         return [edge for edge in edges if edge.relation == relation]
 
+
     def nodes(self, tier: Optional[str] = None) -> Iterator[Node]:
         if tier is None:
             return iter(self._nodes.values())
         ids = self._tiers.get(tier, [])
         return (self._nodes[node_id] for node_id in ids)
 
+    def nodes(self) -> Iterator[Node]:
+        return iter(self._nodes.values())
+
+
     def edges(self) -> Iterator[Edge]:
         return iter(self._edges)
+
 
     def detect_conflicts(self) -> List[Tuple[str, str, Mapping[str, object]]]:
         conflicts: List[Tuple[str, str, Mapping[str, object]]] = []
@@ -222,6 +258,21 @@ class KnowledgeGraph:
             )
             self.add_node(node)
 
+
+    def detect_conflicts(self) -> List[Tuple[str, str]]:
+        conflicts: List[Tuple[str, str]] = []
+        for edge in self._edges:
+            if edge.relation == "contradicts":
+                conflicts.append((edge.source, edge.target))
+        return conflicts
+
+    def validate_sources(self) -> Dict[str, List[str]]:
+        missing: Dict[str, List[str]] = {}
+        for node in self._nodes.values():
+            if not node.sources:
+                missing[node.id] = ["missing_sources"]
+        return missing
+
     def query(self, text: str, limit: int = 5) -> List[Node]:
         text_lower = text.lower()
         scored: List[Tuple[float, Node]] = []
@@ -233,6 +284,15 @@ class KnowledgeGraph:
                 scored.append((score, node))
         scored.sort(key=lambda item: item[0], reverse=True)
         return [node for _, node in scored[:limit]]
+
+
+
+    @staticmethod
+    def _score(query: str, candidate: str) -> float:
+        if query in candidate:
+            return float(len(query)) / (len(candidate) + 1)
+        overlap = len(set(query.split()) & set(candidate.split()))
+        return float(overlap)
 
     def export_jsonl(self, path: str | Path) -> None:
         with open(path, "w", encoding="utf-8") as handle:
@@ -256,8 +316,10 @@ class KnowledgeGraph:
                             sources=record.get("sources", []),
                             confidence=record.get("confidence", 1.0),
                             metadata=record.get("metadata", {}),
+
                             tier=record.get("tier", "hot"),
                             embedding=record.get("embedding"),
+
                         )
                     )
                 elif record.get("type") == "edge":
@@ -271,6 +333,7 @@ class KnowledgeGraph:
                         )
                     )
         return graph
+
 
     def _score(self, query: str, candidate: str) -> float:
         if query in candidate:
@@ -308,3 +371,7 @@ __all__ = [
     "Node",
     "VerificationResult",
 ]
+
+
+__all__ = ["Edge", "KnowledgeGraph", "Node"]
+

@@ -1,3 +1,4 @@
+
 """Foundational and advanced multimodal encoders for the Kolibri-x MVP.
 
 The original bootstrap implementation focused on determinism and
@@ -13,12 +14,28 @@ from __future__ import annotations
 
 from collections import Counter, deque
 from dataclasses import dataclass, field
+
+"""Foundational multimodal encoders for the Kolibri-x MVP.
+
+These lightweight implementations prioritise determinism and
+resource-awareness so they can run on-device while we iterate on the
+full transformer stack described in the architecture blueprint.
+"""
+from __future__ import annotations
+
+from collections import Counter
+from dataclasses import dataclass
+
 import hashlib
 import math
 import os
 import re
+
 from statistics import fmean
 from typing import Dict, Iterable, Iterator, List, Mapping, MutableMapping, Optional, Sequence, Tuple
+
+from typing import Dict, Iterable, List, Mapping, MutableMapping, Sequence
+
 
 
 _WORD_REGEX = re.compile(r"[\w\-']+")
@@ -105,6 +122,7 @@ class ImageEncoder:
 class FusionResult:
     embedding: List[float]
     modality_weights: Mapping[str, float]
+
     metadata: Mapping[str, object] = field(default_factory=dict)
 
 
@@ -240,6 +258,7 @@ class AdaptiveCrossModalTransformer:
         return tuple(self._history)
 
 
+
 class FusionTransformer:
     """Simple cross-modal fusion through weighted averaging."""
 
@@ -263,6 +282,7 @@ class FusionTransformer:
                 accumulator[index] += weight * float(value)
         if total_weight:
             accumulator = [value / total_weight for value in accumulator]
+
         return FusionResult(embedding=accumulator, modality_weights=applied_weights, metadata={})
 
 
@@ -479,9 +499,13 @@ class ContinualLearner:
     def snapshot(self) -> Mapping[str, object]:
         return {"weights": dict(self._weights), "importance": dict(self._importance), "tasks": list(self._task_history)}
 
+        return FusionResult(embedding=accumulator, modality_weights=applied_weights)
+
+
 
 __all__ = [
     "ASREncoder",
+
     "AdaptiveAudioEncoder",
     "AdaptiveCrossModalTransformer",
     "ContinualLearner",
@@ -499,4 +523,11 @@ __all__ = [
     "TextEncoder",
 ]
 
+
+
+    "FusionResult",
+    "FusionTransformer",
+    "ImageEncoder",
+    "TextEncoder",
+]
 

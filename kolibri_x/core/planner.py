@@ -1,11 +1,19 @@
+
 """Advanced neuro-semantic planning with hierarchical coordination."""
+
+"""Neuro-semantic planner for decomposing user goals into executable steps."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 import itertools
 import uuid
+
 from statistics import fmean
 from typing import Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
+
+from typing import Iterable, List, Mapping, Optional, Sequence
+
 
 from kolibri_x.skills.store import SkillManifest
 
@@ -18,6 +26,7 @@ class PlanStep:
     description: str
     skill: Optional[str] = None
     dependencies: Sequence[str] = field(default_factory=tuple)
+
     risk: float = 0.0
     agent: Optional[str] = None
     metadata: MutableMapping[str, object] = field(default_factory=dict)
@@ -34,17 +43,22 @@ class PlanStep:
         }
 
 
+
+
 @dataclass
 class Plan:
     goal: str
     steps: List[PlanStep]
+
     risk_score: float = 0.0
     horizon: Optional[str] = None
     versions: List[str] = field(default_factory=list)
 
+
     def as_dict(self) -> Mapping[str, object]:
         return {
             "goal": self.goal,
+
             "steps": [step.as_dict() for step in self.steps],
             "risk_score": self.risk_score,
             "horizon": self.horizon,
@@ -164,6 +178,25 @@ class NeuroSemanticPlanner:
         )
         self.missions = MissionLibrary()
 
+            "steps": [
+                {
+                    "id": step.id,
+                    "description": step.description,
+                    "skill": step.skill,
+                    "dependencies": list(step.dependencies),
+                }
+                for step in self.steps
+            ],
+        }
+
+
+class NeuroSemanticPlanner:
+    """Minimal viable planner that aligns goals with available skills."""
+
+    def __init__(self, skill_catalogue: Mapping[str, SkillManifest] | None = None) -> None:
+        self._skills = dict(skill_catalogue or {})
+
+
     def register_skills(self, manifests: Iterable[SkillManifest]) -> None:
         for manifest in manifests:
             self._skills[manifest.name] = manifest
@@ -172,12 +205,17 @@ class NeuroSemanticPlanner:
         tokens = [token.strip() for token in goal.replace("\n", " ").split(".") if token.strip()]
         if not tokens:
             tokens = [goal.strip()]
+
         steps: List[PlanStep] = []
+
+        steps = []
+
         for index, sentence in enumerate(tokens):
             skill = self._match_skill(sentence, hints)
             step_id = f"step-{index+1}-{uuid.uuid4().hex[:6]}"
             dependency = steps[-1].id if steps else None
             dependencies = (dependency,) if dependency else tuple()
+
             risk = self._risk.assess(sentence, dependencies)
             agent = self._coordinator.choose_agent(skill)
             steps.append(
@@ -211,6 +249,10 @@ class NeuroSemanticPlanner:
         assignments = {step.id: step.agent for step in base.steps if step.agent}
         return HierarchicalPlan(root=root_node, risk_score=base.risk_score, assignments=assignments)
 
+            steps.append(PlanStep(id=step_id, description=sentence, skill=skill, dependencies=dependencies))
+        return Plan(goal=goal, steps=steps)
+
+
     def _match_skill(self, sentence: str, hints: Optional[Sequence[str]]) -> Optional[str]:
         candidates = list(self._skills.values())
         if hints:
@@ -230,6 +272,7 @@ class NeuroSemanticPlanner:
         return best
 
 
+
 __all__ = [
     "AgentCoordinator",
     "HierarchicalPlan",
@@ -241,3 +284,6 @@ __all__ = [
     "RiskAssessment",
     "RiskAssessor",
 ]
+
+__all__ = ["NeuroSemanticPlanner", "Plan", "PlanStep"]
+

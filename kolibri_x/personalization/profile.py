@@ -1,9 +1,17 @@
+
 """On-device profiling, achievements, and adaptive prompt selection."""
+
+"""On-device user profiler with privacy-preserving summaries."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+
 from typing import Dict, Iterable, Mapping, MutableMapping, Optional, Sequence
+
+from typing import Dict, Iterable, Mapping, MutableMapping, Optional
+
 
 
 @dataclass
@@ -17,6 +25,7 @@ class InteractionSignal:
 
 
 @dataclass
+
 class EmotionalSnapshot:
     sentiment: float
     arousal: float
@@ -32,6 +41,7 @@ class Achievement:
 
 
 @dataclass
+
 class UserProfile:
     """Aggregated preferences inferred from local interaction signals."""
 
@@ -39,6 +49,7 @@ class UserProfile:
     style_vector: MutableMapping[str, float] = field(default_factory=dict)
     tempo_preference: float = 1.0
     tone_preference: float = 0.0
+
     emotion_baseline: EmotionalSnapshot = field(
         default_factory=lambda: EmotionalSnapshot(sentiment=0.0, arousal=0.0, dominance=0.0)
     )
@@ -47,11 +58,17 @@ class UserProfile:
     last_updated: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     def as_dict(self) -> Mapping[str, object]:
+
+    last_updated: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+    def as_dict(self) -> Mapping[str, float | str]:
+
         return {
             "user_id": self.user_id,
             "tempo_preference": self.tempo_preference,
             "tone_preference": self.tone_preference,
             "style_vector": dict(self.style_vector),
+
             "cognitive_preferences": dict(self.cognitive_preferences),
             "emotion_baseline": {
                 "sentiment": self.emotion_baseline.sentiment,
@@ -60,6 +77,7 @@ class UserProfile:
                 "timestamp": self.emotion_baseline.timestamp.isoformat(),
             },
             "achievements": {key: value.description for key, value in self.achievements.items()},
+
             "last_updated": self.last_updated.isoformat(),
         }
 
@@ -84,9 +102,11 @@ class OnDeviceProfiler:
             profile.tempo_preference = self._blend(profile.tempo_preference, signal.value, weight)
         elif signal.type == "tone":
             profile.tone_preference = self._blend(profile.tone_preference, signal.value, weight)
+
         elif signal.type.startswith("emotion::"):
             dimension = signal.type.split("::", 1)[1]
             self._update_emotion(profile, dimension, signal.value)
+
         else:
             previous = profile.style_vector.get(signal.type, 0.0)
             profile.style_vector[signal.type] = self._blend(previous, signal.value, weight)
@@ -109,6 +129,9 @@ class OnDeviceProfiler:
         )
 
     def export_profile(self, user_id: str) -> Mapping[str, object]:
+
+    def export_profile(self, user_id: str) -> Mapping[str, float | str]:
+
         return self._profile(user_id).as_dict()
 
     def profiles(self) -> Mapping[str, UserProfile]:
@@ -179,3 +202,7 @@ __all__ = [
     "OnDeviceProfiler",
     "UserProfile",
 ]
+
+
+__all__ = ["InteractionSignal", "OnDeviceProfiler", "UserProfile"]
+

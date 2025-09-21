@@ -1,11 +1,22 @@
+
 from datetime import datetime, timedelta, timezone
 import sys
 from pathlib import Path
 from typing import Mapping
 
+
+from datetime import datetime, timedelta
+import sys
+from pathlib import Path
+
+from typing import Mapping
+
+
+
 import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
+
 
 from kolibri_x.core.encoders import (
     AdaptiveAudioEncoder,
@@ -28,10 +39,20 @@ from kolibri_x.eval.mksi import compute_metrics
 from kolibri_x.personalization import (
     Achievement,
     AdaptivePromptSelector,
+
+from kolibri_x.core.encoders import TextEncoder
+from kolibri_x.core.planner import NeuroSemanticPlanner
+from kolibri_x.kg.graph import Edge, KnowledgeGraph, Node
+from kolibri_x.kg.rag import RAGPipeline
+
+from kolibri_x.eval.active_learning import ActiveLearner, CandidateExample
+from kolibri_x.personalization import (
+
     EmpathyContext,
     EmpathyModulator,
     InteractionSignal,
     ModelUpdate,
+
     MotivationEngine,
     OnDeviceProfiler,
     SecureAggregator,
@@ -44,6 +65,24 @@ from kolibri_x.runtime.orchestrator import KolibriRuntime, RuntimeRequest, Skill
 from kolibri_x.runtime.workflow import ReminderRule, WorkflowManager
 from kolibri_x.skills.store import SkillManifest, SkillPolicyViolation, SkillStore
 from kolibri_x.xai.panel import ExplanationPanel
+
+    OnDeviceProfiler,
+    SecureAggregator,
+)
+from kolibri_x.privacy.consent import PrivacyOperator
+from kolibri_x.runtime.cache import OfflineCache
+
+from kolibri_x.runtime.orchestrator import KolibriRuntime, RuntimeRequest, SkillSandbox
+from kolibri_x.runtime.workflow import ReminderRule, WorkflowManager
+
+from kolibri_x.runtime.workflow import ReminderRule, WorkflowManager
+
+from kolibri_x.privacy.consent import PrivacyOperator
+from kolibri_x.runtime.cache import OfflineCache
+
+
+from kolibri_x.skills.store import SkillManifest, SkillStore
+
 from kolibri_x.xai.reasoning import ReasoningLog
 
 
@@ -90,6 +129,7 @@ def skill_store() -> SkillStore:
     return store
 
 
+
 def _bootstrap_runtime(
     knowledge_graph: KnowledgeGraph,
     skill_store: SkillStore,
@@ -121,6 +161,7 @@ def _bootstrap_runtime(
     return runtime
 
 
+
 def test_rag_pipeline_returns_supported_answer(knowledge_graph: KnowledgeGraph) -> None:
     pipeline = RAGPipeline(knowledge_graph, encoder=TextEncoder(dim=16))
     reasoning = ReasoningLog()
@@ -132,11 +173,14 @@ def test_rag_pipeline_returns_supported_answer(knowledge_graph: KnowledgeGraph) 
 
 def test_privacy_operator_controls_access() -> None:
     operator = PrivacyOperator()
+
     operator.register_layer(PolicyLayer(name="baseline", scope={"text"}, default_action="allow"))
+
     operator.grant("user-1", ["audio", "text"])
     operator.deny("user-1", ["audio"])
     assert operator.is_allowed("user-1", "text")
     assert not operator.is_allowed("user-1", "audio")
+
     allowed = operator.enforce("user-1", ["audio", "text", "image"])
     assert allowed == ["text"]
 
@@ -151,23 +195,30 @@ def test_privacy_operator_layers_and_proofs() -> None:
     allowed = operator.enforce("user", ["unknown"])
     assert allowed == []
 
+    assert operator.enforce("user-1", ["audio", "text", "image"]) == ["text"]
+
+
 
 def test_skill_store_permission_checks(skill_store: SkillStore) -> None:
     assert skill_store.require_permissions("writer", ["net.read:whitelist"])
     with pytest.raises(KeyError):
         skill_store.require_permissions("unknown", [])
+
     skill_store.enforce_policy("writer", [])
     with pytest.raises(SkillPolicyViolation):
         skill_store.enforce_policy("writer", ["pii"])
+
 
 
 def test_planner_aligns_steps_with_skills(skill_store: SkillStore) -> None:
     planner = NeuroSemanticPlanner({manifest.name: manifest for manifest in skill_store.list()})
     plan = planner.plan("Draft and refine the product pitch deck.")
     assert plan.steps[0].skill == "writer"
+
     hierarchical = planner.hierarchical_plan("Draft and refine the product pitch deck.")
     assert isinstance(hierarchical, HierarchicalPlan)
     assert hierarchical.assignments
+
 
 
 def test_offline_cache_eviction() -> None:
@@ -182,6 +233,7 @@ def test_offline_cache_eviction() -> None:
     clock += timedelta(minutes=10)  # type: ignore[operator]
     assert cache.get("answer") is None
     assert cache.size() == 0
+
 
 
 def test_adaptive_cross_modal_transformer_decides_depth() -> None:
@@ -242,6 +294,7 @@ def test_knowledge_graph_verification_and_compression() -> None:
     assert queries
 
 
+
 def test_profiler_and_empathy_modulation() -> None:
     profiler = OnDeviceProfiler(decay=0.9)
     signals = [
@@ -250,7 +303,9 @@ def test_profiler_and_empathy_modulation() -> None:
         InteractionSignal(type="formality", value=0.6, weight=1.0),
     ]
     profile = profiler.bulk_record("user-42", signals)
+
     profiler.unlock("user-42", Achievement(identifier="onboarding", description="Completed onboarding"))
+
     aggregator = SecureAggregator()
     aggregator.submit(ModelUpdate(user_id="user-42", values={"tone": profile.tone_preference}, clipping=0.5))
     aggregator.submit(ModelUpdate(user_id="user-99", values={"tone": -0.1}, clipping=1.0))
@@ -263,6 +318,7 @@ def test_profiler_and_empathy_modulation() -> None:
     assert -1.0 <= adjustments["tone"] <= 1.0
     assert 0.2 <= adjustments["tempo"] <= 3.0
     assert "style::formality" in adjustments
+
     selector = AdaptivePromptSelector()
     examples = [
         {"id": 1, "tags": ["design", "pitch"]},
@@ -321,6 +377,27 @@ def test_runtime_orchestrator_end_to_end(
     knowledge_graph: KnowledgeGraph, skill_store: SkillStore
 ) -> None:
     runtime = _bootstrap_runtime(knowledge_graph, skill_store)
+
+
+def test_runtime_orchestrator_end_to_end(
+    knowledge_graph: KnowledgeGraph, skill_store: SkillStore
+) -> None:
+    sandbox = SkillSandbox()
+
+    def writer_executor(payload: Mapping[str, object]) -> Mapping[str, object]:
+        return {"draft": f"Outline for {payload['goal']}", "modalities": payload.get("modalities", [])}
+
+    sandbox.register("writer", writer_executor)
+
+    cache = OfflineCache(ttl=timedelta(minutes=30))
+    runtime = KolibriRuntime(
+        graph=knowledge_graph,
+        skill_store=skill_store,
+        sandbox=sandbox,
+        cache=cache,
+    )
+    runtime.privacy.grant("user-1", ["text"])
+
 
     request = RuntimeRequest(
         user_id="user-1",
@@ -469,3 +546,4 @@ def test_iot_bridge_with_runtime(knowledge_graph: KnowledgeGraph, skill_store: S
 
     with pytest.raises(RuntimeError):
         runtime.dispatch_iot_command("session-1", IoTCommand(device_id="lamp", action="off"))
+

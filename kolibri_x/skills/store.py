@@ -6,9 +6,11 @@ import json
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence
+
+
 
 MANDATORY_FIELDS = {"name", "version", "inputs", "permissions", "billing", "policy", "entry"}
-
 
 class SkillPolicyViolation(RuntimeError):
     """Raised when a skill manifest policy blocks execution."""
@@ -18,6 +20,7 @@ class SkillPolicyViolation(RuntimeError):
         self.skill = skill
         self.policy = policy
         self.requirement = requirement
+
 
 
 @dataclass
@@ -80,6 +83,7 @@ class SkillStore:
             raise KeyError(f"unknown skill: {name}")
         return all(permission in manifest.permissions for permission in permissions)
 
+
     def enforce_policy(self, name: str, context_tags: Sequence[str]) -> None:
         manifest = self.get(name)
         if not manifest:
@@ -92,6 +96,7 @@ class SkillStore:
             if rule in {"require", "required"} and policy not in tags:
                 raise SkillPolicyViolation(name, policy, rule)
 
+
     @staticmethod
     def load_from_file(path: str | Path) -> "SkillManifest":
         with open(path, "r", encoding="utf-8") as handle:
@@ -99,3 +104,5 @@ class SkillStore:
 
 
 __all__ = ["SkillManifest", "SkillPolicyViolation", "SkillStore"]
+
+__all__ = ["SkillManifest", "SkillStore"]
