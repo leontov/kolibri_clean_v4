@@ -60,6 +60,45 @@ static void json_escape(const char* in, char* out, size_t n){
     }
 }
 
+static void get_json_string_field(
+    const char* json,
+    const char* key,
+    char* dst,
+    size_t dst_size,
+    bool* has_field
+){
+    if(!json || !key || !dst || dst_size == 0){
+        return;
+    }
+    const char* q = strstr(json, key);
+    if(!q){
+        return;
+    }
+    q = strchr(q, ':');
+    if(!q){
+        return;
+    }
+    q++;
+    while(*q == ' ' || *q == '\t'){
+        q++;
+    }
+    if(*q != '"'){
+        return;
+    }
+    q++;
+    size_t j = 0;
+    while(*q && *q != '"' && j + 1 < dst_size){
+        if(*q == '\\' && q[1]){
+            q++;
+        }
+        dst[j++] = *q++;
+    }
+    dst[j] = 0;
+    if(has_field){
+        *has_field = true;
+    }
+}
+
 bool kolibri_load_config(kolibri_config_t* c, const char* json_path){
     c->steps = 30;
     c->depth_max = 2;
@@ -73,6 +112,27 @@ bool kolibri_load_config(kolibri_config_t* c, const char* json_path){
     snprintf(c->source_path, sizeof(c->source_path), "<defaults>");
     c->canonical_json[0] = 0;
     c->fingerprint[0] = 0;
+    c->hmac_key[0] = 0;
+    c->hmac_salt[0] = 0;
+    c->has_hmac_key = false;
+    c->has_hmac_salt = false;
+
+    const char* env_key = getenv("KOLIBRI_HMAC_KEY");
+    if(env_key && *env_key){
+        strncpy(c->hmac_key, env_key, sizeof(c->hmac_key) - 1);
+        c->hmac_key[sizeof(c->hmac_key) - 1] = 0;
+        c->has_hmac_key = true;
+    } else {
+        snprintf(c->hmac_key, sizeof(c->hmac_key), "%s", "insecure-key");
+    }
+    const char* env_salt = getenv("KOLIBRI_HMAC_SALT");
+    if(env_salt && *env_salt){
+        strncpy(c->hmac_salt, env_salt, sizeof(c->hmac_salt) - 1);
+        c->hmac_salt[sizeof(c->hmac_salt) - 1] = 0;
+        c->has_hmac_salt = true;
+    } else {
+        c->hmac_salt[0] = 0;
+    }
 
     if(!json_path){
         refresh_fingerprint(c);
@@ -110,6 +170,8 @@ bool kolibri_load_config(kolibri_config_t* c, const char* json_path){
     GETD("\"eff_threshold\"", c->eff_threshold);
     GETD("\"max_complexity\"", c->max_complexity);
     GETU("\"seed\"", c->seed);
+    get_json_string_field(p, "\"hmac_key\"", c->hmac_key, sizeof(c->hmac_key), &c->has_hmac_key);
+    get_json_string_field(p, "\"hmac_salt\"", c->hmac_salt, sizeof(c->hmac_salt), &c->has_hmac_salt);
     free(buf);
     refresh_fingerprint(c);
     return true;
@@ -134,4 +196,15 @@ bool kolibri_config_write_snapshot(const kolibri_config_t* cfg, const char* path
         cfg->fingerprint);
     fclose(f);
     return written > 0;
+}
+
+const char* kolibri_config_hmac_key(const kolibri_config_t* cfg){
+    if(cfg && cfg->hmac_key[0]){
+        return cfg->hmac_key;
+    }
+    const char* env_key = getenv("KOLIBRI_HMAC_KEY");
+    if(env_key && *env_key){
+        return env_key;
+    }
+    return "insecure-key";
 }
