@@ -1,308 +1,320 @@
 #include "dsl.h"
+
+#include <math.h>
+#include <stdarg.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
-#include <math.h>
-#include <stdbool.h>
 
-static Formula* fn(NodeType t){
-    Formula* f=(Formula*)calloc(1,sizeof(Formula));
-    f->t=t;
-    f->param_index=-1;
-    return f;
-}
-
-Formula* f_const(double v){ Formula* f=fn(F_CONST); f->v=v; return f; }
-Formula* f_param(int idx){ Formula* f=fn(F_PARAM); f->param_index=idx; return f; }
-Formula* f_x(){ return fn(F_VAR_X); }
-Formula* f_add(Formula* a, Formula* b){ Formula* f=fn(F_ADD); f->a=a; f->b=b; return f; }
-Formula* f_sub(Formula* a, Formula* b){ Formula* f=fn(F_SUB); f->a=a; f->b=b; return f; }
-Formula* f_mul(Formula* a, Formula* b){ Formula* f=fn(F_MUL); f->a=a; f->b=b; return f; }
-Formula* f_div(Formula* a, Formula* b){ Formula* f=fn(F_DIV); f->a=a; f->b=b; return f; }
-Formula* f_min(Formula* a, Formula* b){ Formula* f=fn(F_MIN); f->a=a; f->b=b; return f; }
-Formula* f_max(Formula* a, Formula* b){ Formula* f=fn(F_MAX); f->a=a; f->b=b; return f; }
-Formula* f_sin(Formula* a){ Formula* f=fn(F_SIN); f->a=a; return f; }
-Formula* f_cos(Formula* a){ Formula* f=fn(F_COS); f->a=a; return f; }
-Formula* f_exp(Formula* a){ Formula* f=fn(F_EXP); f->a=a; return f; }
-Formula* f_log(Formula* a){ Formula* f=fn(F_LOG); f->a=a; return f; }
-Formula* f_pow(Formula* a, Formula* b){ Formula* f=fn(F_POW); f->a=a; f->b=b; return f; }
-Formula* f_tanh(Formula* a){ Formula* f=fn(F_TANH); f->a=a; return f; }
-Formula* f_sigmoid(Formula* a){ Formula* f=fn(F_SIGMOID); f->a=a; return f; }
-Formula* f_abs(Formula* a){ Formula* f=fn(F_ABS); f->a=a; return f; }
-
-static double safe_div(double num, double den){
-    if(!isfinite(den) || fabs(den)<1e-9) return 0.0;
-    return num/den;
-}
-
-static double safe_log(double v){
-    double guard = fabs(v) + 1e-9;
-    return log(guard);
-}
-
-static double safe_pow(double a, double b){
-    double guard = fabs(a) + 1e-9;
-    return pow(guard, b);
-}
-
-double f_eval(const Formula* f, const double* params, size_t param_count, double x){
-    switch(f->t){
-        case F_CONST: return f->v;
-        case F_PARAM: return (f->param_index>=0 && (size_t)f->param_index<param_count)? params[f->param_index] : 0.0;
-        case F_VAR_X: return x;
-        case F_ADD: return f_eval(f->a,params,param_count,x)+f_eval(f->b,params,param_count,x);
-        case F_SUB: return f_eval(f->a,params,param_count,x)-f_eval(f->b,params,param_count,x);
-        case F_MUL: return f_eval(f->a,params,param_count,x)*f_eval(f->b,params,param_count,x);
-        case F_DIV: return safe_div(f_eval(f->a,params,param_count,x), f_eval(f->b,params,param_count,x));
-        case F_MIN: {
-            double av=f_eval(f->a,params,param_count,x);
-            double bv=f_eval(f->b,params,param_count,x);
-            return av<bv?av:bv;
-        }
-        case F_MAX: {
-            double av=f_eval(f->a,params,param_count,x);
-            double bv=f_eval(f->b,params,param_count,x);
-            return av>bv?av:bv;
-        }
-        case F_SIN: return sin(f_eval(f->a,params,param_count,x));
-        case F_COS: return cos(f_eval(f->a,params,param_count,x));
-        case F_EXP: return exp(f_eval(f->a,params,param_count,x));
-        case F_LOG: return safe_log(f_eval(f->a,params,param_count,x));
-        case F_POW: return safe_pow(f_eval(f->a,params,param_count,x), f_eval(f->b,params,param_count,x));
-        case F_TANH: return tanh(f_eval(f->a,params,param_count,x));
-        case F_SIGMOID: {
-            double v=f_eval(f->a,params,param_count,x);
-            double e=exp(-v);
-            return 1.0/(1.0+e);
-        }
-        case F_ABS: return fabs(f_eval(f->a,params,param_count,x));
+static DSLNode *dsl_alloc(DSLNodeType type) {
+    DSLNode *node = (DSLNode *)calloc(1, sizeof(DSLNode));
+    if (node != NULL) {
+        node->type = type;
     }
-    return 0.0;
+    return node;
 }
 
-static void zero_grad(double* g, size_t n){ if(g) memset(g,0,n*sizeof(double)); }
-
-static double* new_grad_buffer(size_t n){
-    if(n==0) return NULL;
-    double* g=(double*)calloc(n,sizeof(double));
-    return g;
+DSLNode *dsl_node_const(double value) {
+    DSLNode *node = dsl_alloc(DSL_NODE_CONST);
+    if (node != NULL) {
+        node->value = value;
+    }
+    return node;
 }
 
-static void add_grad(double* dst, const double* src, size_t n, double scale){
-    if(!dst || !src) return;
-    for(size_t i=0;i<n;i++) dst[i]+=src[i]*scale;
+DSLNode *dsl_node_var_x(void) {
+    return dsl_alloc(DSL_NODE_VAR_X);
 }
 
-static double f_eval_grad_internal(const Formula* f, const double* params, size_t param_count,
-                                   double x, double* grad_out){
-    switch(f->t){
-        case F_CONST:
-            return f->v;
-        case F_PARAM:
-            if(grad_out && f->param_index>=0 && (size_t)f->param_index<param_count){
-                grad_out[f->param_index]+=1.0;
+DSLNode *dsl_node_param(int param_index) {
+    DSLNode *node = dsl_alloc(DSL_NODE_PARAM);
+    if (node != NULL) {
+        node->param_index = param_index;
+    }
+    return node;
+}
+
+DSLNode *dsl_node_unary(DSLNodeType type, DSLNode *child) {
+    DSLNode *node = dsl_alloc(type);
+    if (node != NULL) {
+        node->left = child;
+    }
+    return node;
+}
+
+DSLNode *dsl_node_binary(DSLNodeType type, DSLNode *left, DSLNode *right) {
+    DSLNode *node = dsl_alloc(type);
+    if (node != NULL) {
+        node->left = left;
+        node->right = right;
+    }
+    return node;
+}
+
+static double get_param(const double *params, size_t param_count, int index) {
+    if (params == NULL || index < 0 || (size_t)index >= param_count) {
+        return 0.0;
+    }
+    return params[index];
+}
+
+double safe_div(double a, double b) {
+    if (b == 0.0) {
+        b = (a >= 0.0) ? 1e-9 : -1e-9;
+    }
+    if (b == 0.0) {
+        b = 1e-9;
+    }
+    return a / b;
+}
+
+double safe_log(double x) {
+    if (x <= 1e-12) {
+        x = 1e-12;
+    }
+    return log(x);
+}
+
+double safe_pow(double base, double exp) {
+    if (base < 0.0) {
+        double rounded = floor(exp + 0.5);
+        if (fabs(exp - rounded) < 1e-9) {
+            double val = pow(fabs(base), rounded);
+            if (fmod(rounded, 2.0) != 0.0) {
+                val = -val;
             }
-            return (f->param_index>=0 && (size_t)f->param_index<param_count)? params[f->param_index] : 0.0;
-        case F_VAR_X:
+            return val;
+        }
+        base = fabs(base);
+    }
+    return pow(base, exp);
+}
+
+double safe_tanh(double x) {
+    if (x > 20.0) {
+        return 1.0;
+    }
+    if (x < -20.0) {
+        return -1.0;
+    }
+    return tanh(x);
+}
+
+double dsl_eval(const DSLNode *node, double x, const double *params, size_t param_count) {
+    if (node == NULL) {
+        return 0.0;
+    }
+    switch (node->type) {
+        case DSL_NODE_CONST:
+            return node->value;
+        case DSL_NODE_VAR_X:
             return x;
-        case F_ADD:
-        case F_SUB:
-        case F_MUL:
-        case F_DIV:
-        case F_MIN:
-        case F_MAX:
-        case F_POW: {
-            double* ga = grad_out?new_grad_buffer(param_count):NULL;
-            double* gb = grad_out?new_grad_buffer(param_count):NULL;
-            double av = f_eval_grad_internal(f->a, params, param_count, x, ga);
-            double bv = (f->b)?f_eval_grad_internal(f->b, params, param_count, x, gb):0.0;
-            double res=0.0;
-            switch(f->t){
-                case F_ADD:
-                    res = av + bv;
-                    if(grad_out){ add_grad(grad_out, ga, param_count, 1.0); add_grad(grad_out, gb, param_count, 1.0); }
-                    break;
-                case F_SUB:
-                    res = av - bv;
-                    if(grad_out){ add_grad(grad_out, ga, param_count, 1.0); add_grad(grad_out, gb, param_count, -1.0); }
-                    break;
-                case F_MUL:
-                    res = av * bv;
-                    if(grad_out){
-                        add_grad(grad_out, ga, param_count, bv);
-                        add_grad(grad_out, gb, param_count, av);
-                    }
-                    break;
-                case F_DIV: {
-                    double denom = fabs(bv)<1e-9?1e-9:bv;
-                    res = av/denom;
-                    if(grad_out){
-                        double inv = 1.0/(denom);
-                        double inv2 = inv*inv;
-                        add_grad(grad_out, ga, param_count, inv);
-                        add_grad(grad_out, gb, param_count, -av*inv2);
-                    }
-                    break;
-                }
-                case F_MIN:
-                case F_MAX: {
-                    bool take_a = (f->t==F_MIN)?(av<=bv):(av>=bv);
-                    res = take_a?av:bv;
-                    if(grad_out){ add_grad(grad_out, take_a?ga:gb, param_count, 1.0); }
-                    break;
-                }
-                case F_POW: {
-                    double guard = fabs(av)+1e-9;
-                    double powv = pow(guard, bv);
-                    double ln_guard = log(guard);
-                    res = powv;
-                    if(grad_out){
-                        double sign = (av>=0.0)?1.0:-1.0;
-                        add_grad(grad_out, ga, param_count, bv*pow(guard, bv-1.0)*sign);
-                        add_grad(grad_out, gb, param_count, powv*ln_guard);
-                    }
-                    break;
-                }
-                default: break;
+        case DSL_NODE_PARAM:
+            return get_param(params, param_count, node->param_index);
+        case DSL_NODE_ADD:
+            return dsl_eval(node->left, x, params, param_count) +
+                   dsl_eval(node->right, x, params, param_count);
+        case DSL_NODE_SUB:
+            return dsl_eval(node->left, x, params, param_count) -
+                   dsl_eval(node->right, x, params, param_count);
+        case DSL_NODE_MUL:
+            return dsl_eval(node->left, x, params, param_count) *
+                   dsl_eval(node->right, x, params, param_count);
+        case DSL_NODE_DIV:
+            return safe_div(dsl_eval(node->left, x, params, param_count),
+                            dsl_eval(node->right, x, params, param_count));
+        case DSL_NODE_SIN:
+            return sin(dsl_eval(node->left, x, params, param_count));
+        case DSL_NODE_EXP: {
+            double v = dsl_eval(node->left, x, params, param_count);
+            if (v > 20.0) {
+                v = 20.0;
             }
-            if(ga) free(ga);
-            if(gb) free(gb);
-            return res;
-        }
-        case F_SIN:
-        case F_COS:
-        case F_EXP:
-        case F_LOG:
-        case F_TANH:
-        case F_SIGMOID:
-        case F_ABS: {
-            double* ga = grad_out?new_grad_buffer(param_count):NULL;
-            double av = f_eval_grad_internal(f->a, params, param_count, x, ga);
-            double res=0.0;
-            double factor=0.0;
-            switch(f->t){
-                case F_SIN: res=sin(av); factor=cos(av); break;
-                case F_COS: res=cos(av); factor=-sin(av); break;
-                case F_EXP: res=exp(av); factor=res; break;
-                case F_LOG: res=safe_log(av); factor=1.0/(fabs(av)+1e-9); break;
-                case F_TANH: res=tanh(av); factor=1.0-res*res; break;
-                case F_SIGMOID: {
-                    res=1.0/(1.0+exp(-av));
-                    factor=res*(1.0-res);
-                    break;
-                }
-                case F_ABS: res=fabs(av); factor=(av>=0.0)?1.0:-1.0; break;
-                default: break;
+            if (v < -20.0) {
+                v = -20.0;
             }
-            if(grad_out){ add_grad(grad_out, ga, param_count, factor); }
-            if(ga) free(ga);
-            return res;
+            return exp(v);
         }
+        case DSL_NODE_LOG:
+            return safe_log(dsl_eval(node->left, x, params, param_count));
+        case DSL_NODE_POW:
+            return safe_pow(dsl_eval(node->left, x, params, param_count),
+                            dsl_eval(node->right, x, params, param_count));
+        case DSL_NODE_TANH:
+            return safe_tanh(dsl_eval(node->left, x, params, param_count));
     }
     return 0.0;
 }
 
-double f_eval_grad(const Formula* f, const double* params, size_t param_count,
-                   double x, double* grad_out){
-    if(grad_out) zero_grad(grad_out, param_count);
-    return f_eval_grad_internal(f, params, param_count, x, grad_out);
-}
-
-int f_complexity(const Formula* f){
-    if(!f) return 0;
-    switch(f->t){
-        case F_CONST:
-        case F_PARAM:
-        case F_VAR_X:
-            return 1;
-        case F_SIN:
-        case F_COS:
-        case F_EXP:
-        case F_LOG:
-        case F_TANH:
-        case F_SIGMOID:
-        case F_ABS:
-            return 1 + f_complexity(f->a);
-        case F_MIN:
-        case F_MAX:
-        case F_ADD:
-        case F_SUB:
-        case F_MUL:
-        case F_DIV:
-        case F_POW:
-            return 1 + f_complexity(f->a) + f_complexity(f->b);
+size_t dsl_complexity(const DSLNode *node) {
+    if (node == NULL) {
+        return 0;
     }
-    return 0;
+    size_t left = dsl_complexity(node->left);
+    size_t right = dsl_complexity(node->right);
+    return 1 + left + right;
 }
 
-static int render_rec(const Formula* f, char* out, size_t n){
-    if(n==0) return -1;
-    switch(f->t){
-        case F_CONST: return snprintf(out, n, "%.6g", f->v);
-        case F_PARAM: return snprintf(out, n, "c%d", f->param_index);
-        case F_VAR_X: return snprintf(out, n, "x");
-        case F_SIN:
-        case F_COS:
-        case F_EXP:
-        case F_LOG:
-        case F_TANH:
-        case F_SIGMOID:
-        case F_ABS: {
-            const char* name = (f->t==F_SIN)?"sin":
-                               (f->t==F_COS)?"cos":
-                               (f->t==F_EXP)?"exp":
-                               (f->t==F_LOG)?"log":
-                               (f->t==F_TANH)?"tanh":
-                               (f->t==F_SIGMOID)?"sigmoid":"abs";
-            int m = snprintf(out, n, "%s(", name);
-            if(m<0 || (size_t)m>=n) return -1;
-            int k = render_rec(f->a, out+m, n-m); if(k<0) return -1;
-            int t = m+k;
-            int c = snprintf(out+t, n-t, ")");
-            if(c<0 || (size_t)(t+c)>=n) return -1;
-            return t+c;
-        }
-        case F_MIN:
-        case F_MAX: {
-            const char* name = (f->t==F_MIN)?"min":"max";
-            int m = snprintf(out, n, "%s(", name);
-            if(m<0 || (size_t)m>=n) return -1;
-            int k = render_rec(f->a, out+m, n-m); if(k<0) return -1; int t=m+k;
-            int c = snprintf(out+t, n-t, ","); if(c<0 || (size_t)(t+c)>=n) return -1; t+=c;
-            int q = render_rec(f->b, out+t, n-t); if(q<0) return -1; t+=q;
-            int e = snprintf(out+t, n-t, ")"); if(e<0 || (size_t)(t+e)>=n) return -1;
-            return t+e;
-        }
-        default: {
-            const char* op = (f->t==F_ADD)?"+":
-                             (f->t==F_SUB)?"-":
-                             (f->t==F_MUL)?"*":
-                             (f->t==F_DIV)?"/":"^";
-            int m = snprintf(out, n, "("); if(m<0||(size_t)m>=n) return -1;
-            int k = render_rec(f->a, out+m, n-m); if(k<0) return -1; int t=m+k;
-            int c = snprintf(out+t, n-t, " %s ", op); if(c<0||(size_t)(t+c)>=n) return -1; t+=c;
-            int q = render_rec(f->b, out+t, n-t); if(q<0) return -1; t+=q;
-            int e = snprintf(out+t, n-t, ")"); if(e<0||(size_t)(t+e)>=n) return -1;
-            return t+e;
-        }
+
+DSLNode *dsl_clone(const DSLNode *node) {
+    if (node == NULL) {
+        return NULL;
+    }
+    DSLNode *copy = dsl_alloc(node->type);
+    if (copy == NULL) {
+        return NULL;
+    }
+    copy->value = node->value;
+    copy->param_index = node->param_index;
+    copy->left = dsl_clone(node->left);
+    copy->right = dsl_clone(node->right);
+    return copy;
+}
+
+void dsl_free(DSLNode *node) {
+    if (node == NULL) {
+        return;
+    }
+    dsl_free(node->left);
+    dsl_free(node->right);
+    free(node);
+}
+
+static void append_str(char **cursor, size_t *remaining, const char *str) {
+    if (*remaining == 0) {
+        return;
+    }
+    size_t len = strlen(str);
+    if (len >= *remaining) {
+        len = *remaining - 1;
+    }
+    memcpy(*cursor, str, len);
+    *cursor += len;
+    **cursor = '\0';
+    *remaining -= len;
+}
+
+static void append_fmt(char **cursor, size_t *remaining, const char *fmt, ...) {
+    if (*remaining == 0) {
+        return;
+    }
+    va_list args;
+    va_start(args, fmt);
+    int written = vsnprintf(*cursor, *remaining, fmt, args);
+    va_end(args);
+    if (written < 0) {
+        return;
+    }
+    if ((size_t)written >= *remaining) {
+        written = (int)(*remaining - 1);
+    }
+    *cursor += written;
+    *remaining -= (size_t)written;
+}
+
+static void append_double(char **cursor, size_t *remaining, double value) {
+    if (*remaining == 0) {
+        return;
+    }
+    if (value == 0.0) {
+        value = 0.0;
+    }
+    char buf[64];
+    int len = snprintf(buf, sizeof(buf), "%.17g", value);
+    if (len < 0) {
+        return;
+    }
+    if ((size_t)len >= sizeof(buf)) {
+        len = (int)sizeof(buf) - 1;
+    }
+    buf[len] = '\0';
+    append_str(cursor, remaining, buf);
+}
+
+static void print_node(const DSLNode *node, char **cursor, size_t *remaining) {
+    if (node == NULL) {
+        append_str(cursor, remaining, "0");
+        return;
+    }
+    switch (node->type) {
+        case DSL_NODE_CONST:
+            append_double(cursor, remaining, node->value);
+            break;
+        case DSL_NODE_VAR_X:
+            append_str(cursor, remaining, "x");
+            break;
+        case DSL_NODE_PARAM:
+            append_fmt(cursor, remaining, "c%d", node->param_index);
+            break;
+        case DSL_NODE_ADD:
+            append_str(cursor, remaining, "add(");
+            print_node(node->left, cursor, remaining);
+            append_str(cursor, remaining, ",");
+            print_node(node->right, cursor, remaining);
+            append_str(cursor, remaining, ")");
+            break;
+        case DSL_NODE_SUB:
+            append_str(cursor, remaining, "sub(");
+            print_node(node->left, cursor, remaining);
+            append_str(cursor, remaining, ",");
+            print_node(node->right, cursor, remaining);
+            append_str(cursor, remaining, ")");
+            break;
+        case DSL_NODE_MUL:
+            append_str(cursor, remaining, "mul(");
+            print_node(node->left, cursor, remaining);
+            append_str(cursor, remaining, ",");
+            print_node(node->right, cursor, remaining);
+            append_str(cursor, remaining, ")");
+            break;
+        case DSL_NODE_DIV:
+            append_str(cursor, remaining, "div(");
+            print_node(node->left, cursor, remaining);
+            append_str(cursor, remaining, ",");
+            print_node(node->right, cursor, remaining);
+            append_str(cursor, remaining, ")");
+            break;
+        case DSL_NODE_SIN:
+            append_str(cursor, remaining, "sin(");
+            print_node(node->left, cursor, remaining);
+            append_str(cursor, remaining, ")");
+            break;
+        case DSL_NODE_EXP:
+            append_str(cursor, remaining, "exp(");
+            print_node(node->left, cursor, remaining);
+            append_str(cursor, remaining, ")");
+            break;
+        case DSL_NODE_LOG:
+            append_str(cursor, remaining, "log(");
+            print_node(node->left, cursor, remaining);
+            append_str(cursor, remaining, ")");
+            break;
+        case DSL_NODE_POW:
+            append_str(cursor, remaining, "pow(");
+            print_node(node->left, cursor, remaining);
+            append_str(cursor, remaining, ",");
+            print_node(node->right, cursor, remaining);
+            append_str(cursor, remaining, ")");
+            break;
+        case DSL_NODE_TANH:
+            append_str(cursor, remaining, "tanh(");
+            print_node(node->left, cursor, remaining);
+            append_str(cursor, remaining, ")");
+            break;
     }
 }
 
-int f_render(const Formula* f, char* out, size_t n){
-    int k = render_rec(f, out, n);
-    if(k<0) return -1;
-    out[k]=0; return k;
-}
-
-void f_free(Formula* f){ if(!f) return; f_free(f->a); f_free(f->b); free(f); }
-
-int f_max_param_index(const Formula* f){
-    if(!f) return -1;
-    int m=-1;
-    if(f->t==F_PARAM && f->param_index>m) m=f->param_index;
-    int la=f_max_param_index(f->a);
-    int lb=f_max_param_index(f->b);
-    if(la>m) m=la;
-    if(lb>m) m=lb;
-    return m;
+void dsl_print_canonical(const DSLNode *node, char *buf, size_t buf_size) {
+    if (buf_size == 0) {
+        return;
+    }
+    buf[0] = '\0';
+    char *cursor = buf;
+    size_t remaining = buf_size;
+    print_node(node, &cursor, &remaining);
+    if (remaining > 0) {
+        *cursor = '\0';
+    } else {
+        buf[buf_size - 1] = '\0';
+    }
 }

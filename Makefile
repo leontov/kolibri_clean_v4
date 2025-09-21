@@ -1,72 +1,60 @@
-SHELL := /bin/sh
-CC := cc
-CFLAGS := -std=c11 -O2 -Wall -Wextra -Wno-unused-parameter -Wno-unused-function
-INCLUDE := -Ibackend/include
+CC ?= cc
+CFLAGS ?= -std=c11 -O2 -Wall -Wextra -pedantic -D_POSIX_C_SOURCE=200809L
+INCLUDES = -Ibackend/include
 
 OPENSSL_CFLAGS := $(shell pkg-config --cflags openssl 2>/dev/null)
-OPENSSL_LIBS   := $(shell pkg-config --libs openssl 2>/dev/null)
-ifeq ($(OPENSSL_LIBS),)
-OPENSSL_PREFIX := $(shell brew --prefix openssl@3 2>/dev/null)
-ifneq ($(OPENSSL_PREFIX),)
-OPENSSL_CFLAGS := -I$(OPENSSL_PREFIX)/include
-OPENSSL_LIBS   := -L$(OPENSSL_PREFIX)/lib -lcrypto
-else
-OPENSSL_LIBS   := -lcrypto
-endif
+OPENSSL_LIBS := $(shell pkg-config --libs openssl 2>/dev/null)
+
+ifeq ($(strip $(OPENSSL_LIBS)),)
+OPENSSL_CFLAGS += -I/opt/homebrew/opt/openssl@3/include
+OPENSSL_LIBS = -L/opt/homebrew/opt/openssl@3/lib -lssl -lcrypto
 endif
 
-CFLAGS  += $(OPENSSL_CFLAGS)
-LDFLAGS := $(OPENSSL_LIBS) -lm
+LIB_SRCS = \
+backend/src/dsl.c \
+backend/src/fractal.c \
+backend/src/fmt_v5.c \
+backend/src/core_crypto.c \
+backend/src/core_run.c \
+backend/src/core_verify.c \
+backend/src/core_replay.c
 
-SRC := backend/src
-BIN_DIR := bin
-BINS := $(BIN_DIR)/kolibri_run $(BIN_DIR)/kolibri_verify $(BIN_DIR)/kolibri_replay
+LIB_OBJS = $(LIB_SRCS:.c=.o)
+CLI_OBJ = backend/src/main_cli.o
 
-TEST_BINS := $(BIN_DIR)/reason_payload_test $(BIN_DIR)/bench_validation_test
+TEST_BINS = tests/test_payload tests/test_fa tests/test_verify_break
 
-COMMON_OBJS := $(SRC)/digit_agents.c $(SRC)/vote_aggregate.c
+.PHONY: all clean test
 
+all: kolibri
 
-all: $(BIN_DIR) $(BINS)
+kolibri: libkolibri.a $(CLI_OBJ)
+	$(CC) $(CFLAGS) $(INCLUDES) $(OPENSSL_CFLAGS) -o $@ $(CLI_OBJ) libkolibri.a $(OPENSSL_LIBS) -lm
 
-$(BIN_DIR):
-	@mkdir -p $(BIN_DIR)
+libkolibri.a: $(LIB_OBJS)
+	@rm -f $@
+	ar rcs $@ $(LIB_OBJS)
 
+backend/src/%.o: backend/src/%.c
+	$(CC) $(CFLAGS) $(INCLUDES) $(OPENSSL_CFLAGS) -c $< -o $@
 
-$(BIN_DIR)/kolibri_run: $(SRC)/main_run.c $(SRC)/core.c $(SRC)/dsl.c $(SRC)/chainio.c $(SRC)/reason.c $(SRC)/config.c $(COMMON_OBJS)
+$(TEST_BINS): libkolibri.a
 
-$(BIN_DIR)/kolibri_run: $(SRC)/main_run.c $(SRC)/core.c $(SRC)/dsl.c $(SRC)/chainio.c $(SRC)/reason.c $(SRC)/config.c $(SRC)/digit_agents.c $(SRC)/vote_aggregate.c
+tests/test_payload: tests/test_payload.c
+	$(CC) $(CFLAGS) $(INCLUDES) $(OPENSSL_CFLAGS) -o $@ $< libkolibri.a $(OPENSSL_LIBS) -lm
 
-	$(CC) $(CFLAGS) $(INCLUDE) $^ -o $@ $(LDFLAGS)
+tests/test_fa: tests/test_fa.c
+	$(CC) $(CFLAGS) $(INCLUDES) $(OPENSSL_CFLAGS) -o $@ $< libkolibri.a $(OPENSSL_LIBS) -lm
 
-$(BIN_DIR)/kolibri_verify: $(SRC)/main_verify.c $(SRC)/dsl.c $(SRC)/chainio.c $(SRC)/reason.c $(SRC)/config.c $(SRC)/digit_agents.c $(SRC)/vote_aggregate.c
-	$(CC) $(CFLAGS) $(INCLUDE) $^ -o $@ $(LDFLAGS)
+tests/test_verify_break: tests/test_verify_break.c
+	$(CC) $(CFLAGS) $(INCLUDES) $(OPENSSL_CFLAGS) -o $@ $< libkolibri.a $(OPENSSL_LIBS) -lm
 
-
-$(BIN_DIR)/kolibri_replay: $(SRC)/main_replay.c $(SRC)/core.c $(SRC)/dsl.c $(SRC)/chainio.c $(SRC)/reason.c $(SRC)/config.c $(COMMON_OBJS)
-
-$(BIN_DIR)/kolibri_replay: $(SRC)/main_replay.c $(SRC)/core.c $(SRC)/dsl.c $(SRC)/chainio.c $(SRC)/reason.c $(SRC)/config.c $(SRC)/digit_agents.c $(SRC)/vote_aggregate.c
-
-	$(CC) $(CFLAGS) $(INCLUDE) $^ -o $@ $(LDFLAGS)
-
-$(BIN_DIR)/test_vote: backend/tests/test_vote.c $(SRC)/digit_agents.c $(SRC)/vote_aggregate.c
-	$(CC) $(CFLAGS) $(INCLUDE) $^ -o $@ $(LDFLAGS)
-
-$(BIN_DIR)/reason_payload_test: backend/tests/reason_payload_test.c $(SRC)/reason.c
-	$(CC) $(CFLAGS) $(INCLUDE) $^ -o $@ $(LDFLAGS)
-
-$(BIN_DIR)/bench_validation_test: backend/tests/bench_validation_test.c $(SRC)/reason.c
-	$(CC) $(CFLAGS) $(INCLUDE) $^ -o $@ $(LDFLAGS)
-
-.PHONY: tests
-tests: $(BIN_DIR) $(TEST_BINS)
-	python3 tests/test_reason_payload.py
-	$(BIN_DIR)/bench_validation_test
-
-.PHONY: test
-test: $(BIN_DIR)/test_vote
-	$(BIN_DIR)/test_vote
-
+test: $(TEST_BINS)
+	@for t in $(TEST_BINS); do \
+	echo "Running $$t"; \
+	./$$t || exit 1; \
+	done
 
 clean:
-	rm -rf $(BIN_DIR) logs/*.jsonl logs/*.json
+	rm -f kolibri libkolibri.a $(LIB_OBJS) $(CLI_OBJ) $(TEST_BINS)
+

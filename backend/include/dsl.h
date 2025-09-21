@@ -1,59 +1,47 @@
 #ifndef KOLIBRI_DSL_H
 #define KOLIBRI_DSL_H
-#include "common.h"
+
+#include <stddef.h>
 
 typedef enum {
-    F_CONST,
-    F_PARAM,
-    F_VAR_X,
-    F_ADD,
-    F_SUB,
-    F_MUL,
-    F_DIV,
-    F_MIN,
-    F_MAX,
-    F_SIN,
-    F_COS,
-    F_EXP,
-    F_LOG,
-    F_POW,
-    F_TANH,
-    F_SIGMOID,
-    F_ABS
-} NodeType;
+    DSL_NODE_CONST,
+    DSL_NODE_VAR_X,
+    DSL_NODE_PARAM,
+    DSL_NODE_ADD,
+    DSL_NODE_SUB,
+    DSL_NODE_MUL,
+    DSL_NODE_DIV,
+    DSL_NODE_SIN,
+    DSL_NODE_EXP,
+    DSL_NODE_LOG,
+    DSL_NODE_POW,
+    DSL_NODE_TANH
+} DSLNodeType;
 
-typedef struct Formula {
-    NodeType t;
-    double v;
+typedef struct DSLNode {
+    DSLNodeType type;
+    double value;
     int param_index;
-    struct Formula* a;
-    struct Formula* b;
-} Formula;
+    struct DSLNode *left;
+    struct DSLNode *right;
+} DSLNode;
 
-Formula* f_const(double v);
-Formula* f_param(int idx);
-Formula* f_x();
-Formula* f_add(Formula* a, Formula* b);
-Formula* f_sub(Formula* a, Formula* b);
-Formula* f_mul(Formula* a, Formula* b);
-Formula* f_div(Formula* a, Formula* b);
-Formula* f_min(Formula* a, Formula* b);
-Formula* f_max(Formula* a, Formula* b);
-Formula* f_sin(Formula* a);
-Formula* f_cos(Formula* a);
-Formula* f_exp(Formula* a);
-Formula* f_log(Formula* a);
-Formula* f_pow(Formula* a, Formula* b);
-Formula* f_tanh(Formula* a);
-Formula* f_sigmoid(Formula* a);
-Formula* f_abs(Formula* a);
+DSLNode *dsl_node_const(double value);
+DSLNode *dsl_node_var_x(void);
+DSLNode *dsl_node_param(int param_index);
+DSLNode *dsl_node_unary(DSLNodeType type, DSLNode *child);
+DSLNode *dsl_node_binary(DSLNodeType type, DSLNode *left, DSLNode *right);
+DSLNode *dsl_clone(const DSLNode *node);
+void dsl_free(DSLNode *node);
 
-double f_eval(const Formula* f, const double* params, size_t param_count, double x);
-double f_eval_grad(const Formula* f, const double* params, size_t param_count,
-                   double x, double* grad_out);
-int    f_complexity(const Formula* f);
-int    f_render(const Formula* f, char* out, size_t n);
-int    f_max_param_index(const Formula* f);
-void   f_free(Formula* f);
+double dsl_eval(const DSLNode *node, double x, const double *params, size_t param_count);
+size_t dsl_complexity(const DSLNode *node);
+void dsl_print_canonical(const DSLNode *node, char *buf, size_t buf_size);
 
-#endif
+/* Safe math helpers */
+double safe_div(double a, double b);
+double safe_log(double x);
+double safe_pow(double base, double exp);
+double safe_tanh(double x);
+
+#endif /* KOLIBRI_DSL_H */

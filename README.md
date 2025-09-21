@@ -1,97 +1,109 @@
-# Kolibri Clean v4
+# Kolibri One-Pass Build
 
-> Автор и владелец разработки: **Кочуров Владислав Евгеньевич**
+Kolibri is a deterministic reasoning ledger that implements FA-10 fractal positioning and the Kolibri Proof-of-Reasoning Ledger (KPRL). The single `kolibri` binary supports generation (`run`), verification (`verify`), and replay (`replay`) of reasoning chains with canonical JSON serialization and OpenSSL SHA/HMAC integrity.
 
-Kolibri Clean v4 — это эталонная реализация журнала действий с детерминированной
-подписью и набором модулей Kolibri-x для экспериментов с мультимодальным
-планировщиком, приватностью и офлайн-режимом. Репозиторий служит точкой
-сборки для команды разработки: здесь описаны архитектура, процессы
-разработки и правила сопровождения.
+## Prerequisites
 
-## Что входит в платформу
-
-- **Детерминированные журналы**: C-бэкенд формирует цепочку JSONL-записей и
-  проверяет их целостность через `hash` и `hmac`, вычисляемые над теми же
-  байтами, что попадают в лог.
-- **Мультимодальное ядро Kolibri-x**: набор легковесных энкодеров,
-  планировщик, граф знаний и рантайм-оркестратор, моделирующие целевую
-  архитектуру Kolibri.
-- **Приватность и персонализация**: локальный оператор согласий,
-  офлайн-кэш, эмпатический модуль и песочницы навыков.
-- **Наблюдаемость и XAI**: журнал рассуждений, аудиторские следы и
-  инструменты повторного прогоня.
-- **Дорожная карта развития**: согласованный план поставки возможностей
-  Kolibri-x и чек-листы качества.
-
-## С чего начать новой команде
-
-1. Прочитайте [портал документации](docs/index.md) — он связывает все
-   материалы и даёт обзор потоков.
-2. Настройте окружение по инструкции из
-   [developer-handbook](docs/developer_handbook.md).
-3. Соберите и запустите журнал с помощью `make bin/kolibri_run` или
-   `./build_macos.sh bin/kolibri_run` (Makefile требует полный путь к цели),
-   затем воспроизведите базовый сценарий, следуя
-   [runtime-operations](docs/runtime_and_operations.md).
-4. Перед изменениями сверяйтесь с [roadmap](docs/roadmap.md) и
-   [architecture](docs/architecture.md), чтобы понимать контекст.
-
-## Быстрый старт
+### Ubuntu
+```bash
+sudo apt-get update
+sudo apt-get install build-essential pkg-config libssl-dev
+```
 
 ### macOS
 ```bash
-./build_macos.sh bin/kolibri_run
-# без ключа
-unset KOLIBRI_HMAC_KEY
-./bin/kolibri_run configs/kolibri.json
-./bin/kolibri_verify logs/chain.jsonl
-# с ключом
-# export KOLIBRI_HMAC_KEY="secret"
-# ./bin/kolibri_run configs/kolibri.json && ./bin/kolibri_verify logs/chain.jsonl
+brew update
+brew install openssl@3
+export PKG_CONFIG_PATH="/opt/homebrew/opt/openssl@3/lib/pkgconfig:$PKG_CONFIG_PATH"
 ```
 
-### Ubuntu / Debian
+## Build
 ```bash
-sudo apt-get update && sudo apt-get install -y build-essential libssl-dev pkg-config
-make -j"$(nproc)" bin/kolibri_run
+make clean && make
+```
+This produces the `kolibri` binary in the repository root.
+
+## Dataset
+`datasets/demo.csv` contains a sampled sine curve (`x,y`) used for demonstration metrics. The runtime splits the dataset into train/validation/test segments to calculate the `eff_*` scores.
+
+## FA-10 Fractal Addressing
+Votes from ten virtual agents are deterministically mapped to digits `d_i = round(9 * votes[i])`, producing a 10-character address such as `fa="7056172034"`. Each digit selects a transformation from `configs/fractal_map.default.json`, applying chained DSL rewrites that sculpt the reasoning formula. `fa_stab` records the length of the shared prefix across the latest window (size 5 by default) of FA-10 addresses.
+
+## Kolibri Proof-of-Reasoning Ledger (KPRL)
+Each reasoning block is serialized as canonical JSON with the following field order:
+
+| Field | Description |
+|-------|-------------|
+| `step` | Block index starting from 0 |
+| `parent` | Parent index (`-1` for genesis) |
+| `seed` | Deterministic seed used for vote generation |
+| `formula` | Canonical DSL string |
+| `eff` | Score (`eff_val - λ·compl`) |
+| `compl` | Formula complexity (node count) |
+| `prev` | Hex hash of previous block (empty for genesis) |
+| `votes` | Deterministic agent votes |
+| `fmt` | Output format identifier |
+| `fa` | FA-10 address |
+| `fa_stab` | Shared prefix length in the stability window |
+| `fa_map` | Fractal map name |
+| `r` | Map scaling coefficient |
+| `run_id` | Run identifier |
+| `cfg_hash` | SHA256 of the config file |
+| `eff_train` | Training efficiency proxy |
+| `eff_val` | Validation efficiency proxy |
+| `eff_test` | Test efficiency proxy |
+| `explain` | ≤80 char explanation snippet |
+| `hmac_alg` | HMAC algorithm (empty if unused) |
+| `salt` | Optional salt string |
+
+Additional fields must always be appended to preserve backward compatibility and verification symmetry.
+
+## CLI Usage
+```
+kolibri run [--config path] [--steps N] [--beam B] [--lambda L] [--fmt F] [--output file] [--selfcheck]
+kolibri verify <file>
+kolibri replay <file>
+kolibri --help
 ```
 
-Команда `make tests` собирает вспомогательные бинарники и прогоняет
-регрессионные проверки. Для одиночного теста голосования можно вызвать
-`make test`.
+### Example Workflow
+```bash
+./kolibri run --config configs/kolibri.json --steps 30
+./kolibri verify logs/chain.jsonl
+./kolibri replay logs/chain.jsonl
+```
 
-## Структура репозитория
+### Self-check
+```bash
+./kolibri run --config configs/kolibri.json --steps 30 --selfcheck
+```
 
-| Каталог | Содержимое |
-| --- | --- |
-| `backend/` | C-бэкенд журнала: DSL формул, поиск, верификация, CLI. |
-| `bin/` | Скомпилированные утилиты `kolibri_run`, `kolibri_verify`, `kolibri_replay` и тесты. |
-| `configs/` | Конфигурации запуска, например `kolibri.json`. |
-| `docs/` | Полный комплект документации (архитектура, процессы, roadmap). |
-| `kolibri_x/` | Модульная Python-реализация компонентов Kolibri-x. |
-| `tests/` | Python и C-тесты для DSL, агрегации и бэкенда. |
-| `logs/` | Журналы выполнения (`chain.jsonl`), создаются во время запуска. |
+### HMAC Mode
+```bash
+export KOLIBRI_HMAC_KEY="secret"
+./kolibri run --config configs/kolibri.json --steps 30
+./kolibri verify logs/chain.jsonl   # succeeds
+export KOLIBRI_HMAC_KEY="wrong"
+./kolibri verify logs/chain.jsonl   # fails due to mismatched HMAC
+```
 
-Дополнительные сведения по каждому модулю собраны в
-[module reference](docs/module_reference.md).
+## Test Plan
+```bash
+make test                           # builds and runs all C unit tests
+./kolibri run --config configs/kolibri.json --steps 30
+./kolibri verify logs/chain.jsonl
+./kolibri replay logs/chain.jsonl
+python3 - <<'PY'
+from pathlib import Path
+path = Path('logs/chain.jsonl')
+data = path.read_text()
+path.write_text(data.replace('"', "'", 1))
+PY
+./kolibri verify logs/chain.jsonl    # should report failure at step 0
+```
 
-## Процессы разработки
-
-- Всегда запускайте `make tests` перед коммитом. Это быстрый набор
-  проверок, который гарантирует целостность DSL и бенчмарков.
-- Изменяя бэкенд, обновляйте схемы конфигураций в
-  [runtime_and_operations.md](docs/runtime_and_operations.md).
-- При добавлении новых возможностей синхронизируйтесь с дорожной картой и
-  вносите изменения в [roadmap](docs/roadmap.md).
-- Ведение журнала разработки, правила код-ревью и чек-листы описаны в
-  [developer handbook](docs/developer_handbook.md).
-
-## Документация и поддержка
-
-- [docs/index.md](docs/index.md) — карта знаний проекта.
-- Вопросы и предложения фиксируйте в issue-трекере. В каждом обсуждении
-  указывайте релевантные разделы документации.
-- За актуальность документов отвечает автор проекта — Кочуров Владислав
-  Евгеньевич. Обновляйте материалы одновременно с кодом, чтобы команда
-  всегда знала, как воспроизвести функциональность и продолжить работу.
+## Internals
+- **DSL**: Supports nodes `CONST`, `VAR_X`, `PARAM`, `ADD`, `SUB`, `MUL`, `DIV`, `SIN`, `EXP`, `LOG`, `POW`, and `TANH` with safe numeric guards (`safe_div`, `safe_log`, `safe_pow`, `safe_tanh`).
+- **Serialization**: Canonical JSON (no spaces, fixed order, `%.17g` numbers, C locale). The same code path is used by `run`, `verify`, and `replay`.
+- **Hashing/HMAC**: SHA256 payload digest and optional `HMAC_SHA256` using OpenSSL 3.
 
