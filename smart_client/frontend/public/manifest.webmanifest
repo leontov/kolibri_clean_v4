@@ -1,0 +1,15 @@
+{
+  "name": "Kolibri Smart Client",
+  "short_name": "Kolibri",
+  "start_url": ".",
+  "display": "standalone",
+  "background_color": "#0f172a",
+  "theme_color": "#2563eb",
+  "icons": [
+    {
+      "src": "/kolibri.svg",
+      "sizes": "512x512",
+      "type": "image/svg+xml"
+    }
+  ]
+}
