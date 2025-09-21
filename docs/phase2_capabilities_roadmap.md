@@ -218,6 +218,9 @@ with explicit dependencies, but each table can feed directly into a backlog tool
 | 95 | Config registry | Manifest schema, CLI tools, rollback workflows | Platform Ops | GitOps |
 | 96 | Zero-downtime releases | Canary orchestration, traffic shadowing, rollback automation | Platform Ops | Config registry |
 
+- **Runtime progress (config registry #95):** `kolibri_run` now writes `logs/config_snapshot.json` with the canonical
+  configuration JSON and SHA-256 fingerprint for each execution, seeding the manifest ledger for future diff tooling.
+
 ### Validation & Rollout
 - Latency reduction ≥20%; cost overrun alerts triggered in staging tests; canary release success rate ≥99%.
 - Wave B: 89–92 GA. Wave C: 93–96 GA.

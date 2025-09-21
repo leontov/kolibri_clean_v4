@@ -18,6 +18,10 @@ int main(int argc, char** argv){
     kolibri_config_t cfg; kolibri_load_config(&cfg, cfg_path);
 
     ensure_logs_dir();
+    /* Config registry snapshot (Phase 2 roadmap item 95). */
+    if(!kolibri_config_write_snapshot(&cfg, "logs/config_snapshot.json")){
+        fprintf(stderr, "[WARN] unable to write config snapshot registry\n");
+    }
     char prev[65]={0}, hash[65]={0};
     for(int step=1; step<=cfg.steps; ++step){
         ReasonBlock b={0};

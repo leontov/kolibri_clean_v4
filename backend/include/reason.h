@@ -13,6 +13,7 @@ typedef struct {
     double bench_eff[10];
     char memory[256];
     char fmt[16];
+    char config_fingerprint[65];
     double eff, compl;
     char prev[65];
     char merkle[65];
@@ -21,7 +22,7 @@ typedef struct {
 } ReasonBlock;
 
 /* Build canonical JSON payload (without hash/hmac), into buf.
-   Order: step,parent,seed,fmt,formula,param_count,params,eff,compl,prev,votes (10),
+   Order: step,parent,seed,config_fingerprint,fmt,formula,param_count,params,eff,compl,prev,votes (10),
           vote_softmax,vote_median,bench (10),memory,merkle
    Floats: %.17g
    No spaces anywhere.

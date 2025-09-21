@@ -50,6 +50,16 @@ bool chain_load(const char* path, ReasonBlock** out_arr, size_t* out_n){
         if(sscanf(line, "{\"step\":%llu", &tmp)==1) b->step=(uint64_t)tmp;
         char* p=strstr(line,"\"parent\":"); if(p && sscanf(p,"\"parent\":%llu",&tmp)==1) b->parent=(uint64_t)tmp;
         p=strstr(line,"\"seed\":"); if(p && sscanf(p,"\"seed\":%llu",&tmp)==1) b->seed=(uint64_t)tmp;
+        p=strstr(line,"\"config_fingerprint\":\"");
+        if(p){
+            p+=strlen("\"config_fingerprint\":\"");
+            size_t j=0;
+            while(*p && *p!='"' && j<sizeof(b->config_fingerprint)-1){
+                if(*p=='\\' && p[1]) p++;
+                b->config_fingerprint[j++]=*p++;
+            }
+            b->config_fingerprint[j]=0;
+        }
         p=strstr(line,"\"fmt\":\"");
         if(p){ p+=strlen("\"fmt\":\""); size_t j=0; while(*p && *p!='"' && j<sizeof(b->fmt)-1){ if(*p=='\\'&&p[1]) p++; b->fmt[j++]=*p++; } b->fmt[j]=0; }
         p=strstr(line,"\"formula\":\"");
