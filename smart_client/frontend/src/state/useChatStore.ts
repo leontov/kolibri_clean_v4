@@ -50,10 +50,16 @@ const randomId = () => {
 };
 
 const API_BASE = resolveApiBase();
+
 const KNOWN_APP_ROUTES = new Set(["chat", "ledger", "settings"]);
 
 function resolveApiBase(): string {
   const fromEnv = normalizeBase(import.meta.env.VITE_API_BASE ?? "");
+
+
+function resolveApiBase(): string {
+  const fromEnv = trimTrailingSlash(import.meta.env.VITE_API_BASE ?? "");
+
   if (fromEnv) {
     return fromEnv;
   }
@@ -66,7 +72,11 @@ function resolveApiBase(): string {
     __KOLIBRI_API_BASE__?: string;
     __kolibriApiBase?: string;
   };
+
   const globalBase = normalizeBase(
+
+  const globalBase = trimTrailingSlash(
+
     globalWithApiBase.__KOLIBRI_API_BASE__ ?? globalWithApiBase.__kolibriApiBase ?? ""
   );
   if (globalBase) {
@@ -74,7 +84,11 @@ function resolveApiBase(): string {
   }
 
   const meta = document.querySelector('meta[name="kolibri-api-base"]')?.getAttribute("content") ?? "";
+
   const metaBase = normalizeBase(meta);
+
+  const metaBase = trimTrailingSlash(meta);
+
   if (metaBase) {
     return metaBase;
   }
@@ -118,6 +132,28 @@ function inferBaseFromLocation(): string {
   }
 
   return `/${segments.join("/")}`;
+
+  const { pathname } = window.location;
+  const segments = pathname.split("/");
+  if (segments.length <= 1) {
+    return "";
+  }
+
+  if (segments[segments.length - 1] === "") {
+    segments.pop();
+  }
+
+  const baseSegments = segments.slice(0, -1);
+  const candidate = baseSegments.join("/") || "/";
+  if (candidate === "/" || candidate === "") {
+    return "";
+  }
+  return trimTrailingSlash(candidate);
+}
+
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, "");
+
 }
 
 export const useChatStore = create<ChatState>()(
