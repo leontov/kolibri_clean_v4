@@ -5,15 +5,24 @@
 typedef struct {
     uint64_t step, parent, seed;
     double votes[10];
+    double vote_softmax;
+    double vote_median;
     char formula[256];
+    int param_count;
+    double params[8];
+    double bench_eff[10];
+    char memory[256];
+    char fmt[16];
     double eff, compl;
     char prev[65];
+    char merkle[65];
     char hash[65];
     char hmac[65];
 } ReasonBlock;
 
 /* Build canonical JSON payload (without hash/hmac), into buf.
-   Order: step,parent,seed,formula,eff,compl,prev,votes (10)
+   Order: step,parent,seed,fmt,formula,param_count,params,eff,compl,prev,votes (10),
+          vote_softmax,vote_median,bench (10),memory,merkle
    Floats: %.17g
    No spaces anywhere.
    Example:
