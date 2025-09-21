@@ -1,9 +1,12 @@
-"""Offline cache with deterministic eviction for the Kolibri-x MVP."""
+"""Runtime caching primitives."""
 from __future__ import annotations
 
+import hashlib
+import json
+from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Mapping, Optional, Sequence
 
 
 TimeProvider = Callable[[], datetime]
@@ -40,4 +43,58 @@ class OfflineCache:
         return len(self._entries)
 
 
-__all__ = ["OfflineCache"]
+class RAGCache:
+    """Caches retrieval-augmented answers per user and context."""
+
+    def __init__(
+        self,
+        ttl: timedelta = timedelta(minutes=30),
+        *,
+        time_provider: Optional[TimeProvider] = None,
+    ) -> None:
+        self._cache = OfflineCache(ttl=ttl, time_provider=time_provider)
+
+    def _key(
+        self,
+        user_id: str,
+        query: str,
+        tags: Sequence[str],
+        modalities: Sequence[str],
+        top_k: int,
+    ) -> str:
+        payload = {
+            "user": user_id,
+            "query": query,
+            "tags": sorted(set(tags)),
+            "modalities": sorted(set(modalities)),
+            "top_k": int(top_k),
+        }
+        raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+    def get(
+        self,
+        user_id: str,
+        query: str,
+        tags: Sequence[str],
+        modalities: Sequence[str],
+        top_k: int,
+    ) -> Optional[Mapping[str, object]]:
+        key = self._key(user_id, query, tags, modalities, top_k)
+        cached = self._cache.get(key)
+        return deepcopy(cached) if cached is not None else None
+
+    def put(
+        self,
+        user_id: str,
+        query: str,
+        tags: Sequence[str],
+        modalities: Sequence[str],
+        top_k: int,
+        answer: Mapping[str, object],
+    ) -> None:
+        key = self._key(user_id, query, tags, modalities, top_k)
+        self._cache.put(key, deepcopy(answer))
+
+
+__all__ = ["OfflineCache", "RAGCache"]
