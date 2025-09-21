@@ -1,0 +1,10 @@
+{
+  "steps": 30,
+  "depth_max": 2,
+  "depth_decay": 0.7,
+  "quorum": 0.6,
+  "temperature": 0.15,
+  "eff_threshold": 0.8,
+  "max_complexity": 32.0,
+  "seed": 987654321
+}
