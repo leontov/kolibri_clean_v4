@@ -15,6 +15,10 @@ int main(void){
     for(int i = 0; i < 10; i++){
         b.votes[i] = 0.1 * (double)(i + 1);
     }
+    snprintf(b.fa, sizeof(b.fa), "%s", "0123456789");
+    b.fa_stab = 4;
+    strncpy(b.fa_map, "default_v1", sizeof(b.fa_map)-1);
+    b.fractal_r = 0.5;
 
     char buf[1024];
     int len = rb_payload_json(&b, buf, sizeof(buf));

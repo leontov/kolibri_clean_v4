@@ -7,6 +7,10 @@ typedef struct {
     double votes[10];
     double vote_softmax;
     double vote_median;
+    char fa[11];
+    int fa_stab;
+    char fa_map[32];
+    double fractal_r;
     char formula[256];
     int param_count;
     double params[8];
@@ -23,7 +27,7 @@ typedef struct {
 
 /* Build canonical JSON payload (without hash/hmac), into buf.
    Order: step,parent,seed,config_fingerprint,fmt,formula,param_count,params,eff,compl,prev,votes (10),
-          vote_softmax,vote_median,bench (10),memory,merkle
+          vote_softmax,vote_median,bench (10),memory,merkle,fa,fa_stab,fa_map,r
    Floats: %.17g
    No spaces anywhere.
    Example:

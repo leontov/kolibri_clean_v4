@@ -22,7 +22,7 @@ SRC := backend/src
 BIN_DIR := bin
 BINS := $(BIN_DIR)/kolibri_run $(BIN_DIR)/kolibri_verify $(BIN_DIR)/kolibri_replay
 
-TEST_BINS := $(BIN_DIR)/reason_payload_test $(BIN_DIR)/bench_validation_test
+TEST_BINS := $(BIN_DIR)/reason_payload_test $(BIN_DIR)/bench_validation_test $(BIN_DIR)/fractal_test
 
 COMMON_OBJS := $(SRC)/digit_agents.c $(SRC)/vote_aggregate.c
 
@@ -33,9 +33,9 @@ $(BIN_DIR):
 	@mkdir -p $(BIN_DIR)
 
 
-$(BIN_DIR)/kolibri_run: $(SRC)/main_run.c $(SRC)/core.c $(SRC)/dsl.c $(SRC)/chainio.c $(SRC)/reason.c $(SRC)/config.c $(COMMON_OBJS)
+$(BIN_DIR)/kolibri_run: $(SRC)/main_run.c $(SRC)/core.c $(SRC)/dsl.c $(SRC)/chainio.c $(SRC)/reason.c $(SRC)/config.c $(SRC)/fractal.c $(COMMON_OBJS)
 
-$(BIN_DIR)/kolibri_run: $(SRC)/main_run.c $(SRC)/core.c $(SRC)/dsl.c $(SRC)/chainio.c $(SRC)/reason.c $(SRC)/config.c $(SRC)/digit_agents.c $(SRC)/vote_aggregate.c
+$(BIN_DIR)/kolibri_run: $(SRC)/main_run.c $(SRC)/core.c $(SRC)/dsl.c $(SRC)/chainio.c $(SRC)/reason.c $(SRC)/config.c $(SRC)/fractal.c $(SRC)/digit_agents.c $(SRC)/vote_aggregate.c
 
 	$(CC) $(CFLAGS) $(INCLUDE) $^ -o $@ $(LDFLAGS)
 
@@ -43,9 +43,9 @@ $(BIN_DIR)/kolibri_verify: $(SRC)/main_verify.c $(SRC)/dsl.c $(SRC)/chainio.c $(
 	$(CC) $(CFLAGS) $(INCLUDE) $^ -o $@ $(LDFLAGS)
 
 
-$(BIN_DIR)/kolibri_replay: $(SRC)/main_replay.c $(SRC)/core.c $(SRC)/dsl.c $(SRC)/chainio.c $(SRC)/reason.c $(SRC)/config.c $(COMMON_OBJS)
+$(BIN_DIR)/kolibri_replay: $(SRC)/main_replay.c $(SRC)/core.c $(SRC)/dsl.c $(SRC)/chainio.c $(SRC)/reason.c $(SRC)/config.c $(SRC)/fractal.c $(COMMON_OBJS)
 
-$(BIN_DIR)/kolibri_replay: $(SRC)/main_replay.c $(SRC)/core.c $(SRC)/dsl.c $(SRC)/chainio.c $(SRC)/reason.c $(SRC)/config.c $(SRC)/digit_agents.c $(SRC)/vote_aggregate.c
+$(BIN_DIR)/kolibri_replay: $(SRC)/main_replay.c $(SRC)/core.c $(SRC)/dsl.c $(SRC)/chainio.c $(SRC)/reason.c $(SRC)/config.c $(SRC)/fractal.c $(SRC)/digit_agents.c $(SRC)/vote_aggregate.c
 
 	$(CC) $(CFLAGS) $(INCLUDE) $^ -o $@ $(LDFLAGS)
 
@@ -58,10 +58,14 @@ $(BIN_DIR)/reason_payload_test: backend/tests/reason_payload_test.c $(SRC)/reaso
 $(BIN_DIR)/bench_validation_test: backend/tests/bench_validation_test.c $(SRC)/reason.c
 	$(CC) $(CFLAGS) $(INCLUDE) $^ -o $@ $(LDFLAGS)
 
+$(BIN_DIR)/fractal_test: backend/tests/fractal_test.c $(SRC)/fractal.c $(SRC)/dsl.c $(SRC)/reason.c
+	$(CC) $(CFLAGS) $(INCLUDE) $^ -o $@ $(LDFLAGS)
+
 .PHONY: tests
 tests: $(BIN_DIR) $(TEST_BINS)
 	python3 tests/test_reason_payload.py
 	$(BIN_DIR)/bench_validation_test
+	$(BIN_DIR)/fractal_test
 
 .PHONY: test
 test: $(BIN_DIR)/test_vote

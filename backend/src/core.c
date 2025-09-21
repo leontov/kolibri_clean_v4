@@ -4,6 +4,7 @@
 
 #include "digit_agents.h"
 #include "vote_aggregate.h"
+#include "fractal.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -312,6 +313,12 @@ static void compute_merkle(const char* prev_merkle, ReasonBlock* b){
 
 static DigitField g_digit_field;
 static bool g_digit_field_ready = false;
+static FractalMap g_fractal_map;
+static bool g_fractal_ready = false;
+
+#define FA_HISTORY_WINDOW 5
+static char g_fa_history[FA_HISTORY_WINDOW][11];
+static size_t g_fa_history_len = 0;
 
 static void digit_field_shutdown(void) {
     if (g_digit_field_ready) {
@@ -332,24 +339,39 @@ static bool ensure_digit_field(const kolibri_config_t* cfg) {
     return true;
 }
 
-static Formula* propose_formula(const VoteState* state, uint64_t seed){
-    uint64_t s=seed;
-    int choice=(int)floor(prng01(&s)*6.0);
-    switch(choice){
-
-        case 0:
-            return f_add(f_x(), f_sin(f_x()));
-        case 1:
-            return f_sin(f_mul(f_const(0.1 + 2.9*state->vote[2]), f_x()));
-        case 2:
-            return f_add(f_mul(f_const(-2+4*state->vote[0]), f_sin(f_x())),
-                         f_mul(f_const(-1+2*state->vote[1]), f_x()));
-        case 3:
-            return f_const(-1+2*state->vote[3]);
-        default:
-            return f_const(-2+4*state->vote[4]);
-
+static bool ensure_fractal_map(void){
+    if(g_fractal_ready){
+        return true;
     }
+    if(!fractal_map_load("configs/fractal_map.default.json", &g_fractal_map)){
+        return false;
+    }
+    g_fractal_ready = true;
+    return true;
+}
+
+static void fractal_history_push(const char* fa){
+    if(!fa || !fa[0]){
+        return;
+    }
+    if(g_fa_history_len < FA_HISTORY_WINDOW){
+        strncpy(g_fa_history[g_fa_history_len], fa, 10);
+        g_fa_history[g_fa_history_len][10] = 0;
+        g_fa_history_len++;
+    } else {
+        for(size_t i = 1; i < FA_HISTORY_WINDOW; ++i){
+            memcpy(g_fa_history[i-1], g_fa_history[i], 11);
+        }
+        strncpy(g_fa_history[FA_HISTORY_WINDOW-1], fa, 10);
+        g_fa_history[FA_HISTORY_WINDOW-1][10] = 0;
+    }
+}
+
+static int fractal_current_stability(void){
+    if(g_fa_history_len == 0){
+        return 0;
+    }
+    return fractal_common_prefix_len((const char (*)[11])g_fa_history, g_fa_history_len);
 }
 
 bool kolibri_step(const kolibri_config_t* cfg, int step, const char* prev_hash,
@@ -364,6 +386,9 @@ bool kolibri_step(const kolibri_config_t* cfg, int step, const char* prev_hash,
 
 
     if (!ensure_digit_field(cfg)) {
+        return false;
+    }
+    if (!ensure_fractal_map()) {
         return false;
     }
 
@@ -383,7 +408,16 @@ bool kolibri_step(const kolibri_config_t* cfg, int step, const char* prev_hash,
     out->vote_softmax = vote_softmax_avg(out->votes, cfg->temperature);
     out->vote_median = vote_weighted_median(out->votes);
 
-    Formula* f = propose_formula(&vote_state, out->seed);
+    fractal_address_from_votes(out->votes, out->fa);
+    fractal_history_push(out->fa);
+    out->fa_stab = fractal_current_stability();
+    snprintf(out->fa_map, sizeof(out->fa_map), "%s", g_fractal_map.id);
+    out->fractal_r = g_fractal_map.r;
+
+    Formula* f = fractal_build_formula(out->fa, &g_fractal_map);
+    if(!f){
+        return false;
+    }
     EvalResult er = evaluate_formula(f);
     out->eff = er.eff;
     out->compl = er.compl;

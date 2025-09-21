@@ -122,6 +122,14 @@ bool chain_load(const char* path, ReasonBlock** out_arr, size_t* out_n){
         if(p){ p+=strlen("\"memory\":\""); size_t j=0; while(*p && *p!='"' && j<sizeof(b->memory)-1){ if(*p=='\\'&&p[1]) p++; b->memory[j++]=*p++; } b->memory[j]=0; }
         p=strstr(line,"\"merkle\":\"");
         if(p) sscanf(p,"\"merkle\":\"%64[0-9a-f]\"", b->merkle);
+        p=strstr(line,"\"fa\":\"");
+        if(p){ p+=strlen("\"fa\":\""); size_t j=0; while(*p && *p!='"' && j<sizeof(b->fa)-1){ if(*p=='\\'&&p[1]) p++; b->fa[j++]=*p++; } b->fa[j]=0; }
+        p=strstr(line,"\"fa_stab\":"); if(p) sscanf(p,"\"fa_stab\":%d", &b->fa_stab);
+        p=strstr(line,"\"fa_map\":\"");
+        if(p){ p+=strlen("\"fa_map\":\""); size_t j=0; while(*p && *p!='"' && j<sizeof(b->fa_map)-1){ if(*p=='\\'&&p[1]) p++; b->fa_map[j++]=*p++; } b->fa_map[j]=0; }
+        p=strstr(line,",\"r\":");
+        if(!p){ p=strstr(line,"\"r\":"); }
+        if(p) sscanf(p,"%*[^0-9-]%lf", &b->fractal_r);
         n++;
     }
     fclose(f);
