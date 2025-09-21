@@ -1,4 +1,4 @@
-"""Mission definitions for the Kolibri evaluation harness."""
+"""Mission execution helpers for Kolibri evaluation."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -17,6 +17,8 @@ class Mission:
     modalities: Mapping[str, object] = field(default_factory=dict)
     hints: Sequence[str] = field(default_factory=tuple)
     expected_skills: Sequence[str] = field(default_factory=tuple)
+    skill_scopes: Sequence[str] = field(default_factory=tuple)
+    data_tags: Sequence[str] = field(default_factory=tuple)
     scoring: Callable[[RuntimeResponse], float] = lambda response: 1.0 if response.answer else 0.0
 
     def run(self, runtime: KolibriRuntime, user_id: str = "eval") -> "MissionOutcome":
@@ -25,6 +27,8 @@ class Mission:
             goal=self.goal,
             modalities=self.modalities,
             hints=self.hints,
+            skill_scopes=self.skill_scopes,
+            data_tags=self.data_tags,
         )
         response = runtime.process(request)
         score = self.scoring(response)
@@ -92,6 +96,8 @@ class MissionPack:
                     "modalities": dict(mission.modalities),
                     "hints": list(mission.hints),
                     "expected_skills": list(mission.expected_skills),
+                    "skill_scopes": list(mission.skill_scopes),
+                    "data_tags": list(mission.data_tags),
                 }
                 for mission in self.missions
             ],

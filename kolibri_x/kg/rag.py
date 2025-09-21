@@ -1,8 +1,8 @@
-"""Retrieval augmented generation pipeline built on the MVP knowledge graph."""
+"""Retrieval-augmented generation helpers."""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Mapping, MutableMapping, Optional
+from typing import Iterable, List, Mapping, Optional, Sequence
 
 from kolibri_x.core.encoders import TextEncoder
 from kolibri_x.kg.graph import KnowledgeGraph, Node
@@ -39,18 +39,28 @@ class RAGPipeline:
             score = self._dot(query_vector, node_vector)
             if score > 0.0:
                 scored.append(RetrievedFact(node=node, score=score))
-        scored.sort(key=lambda item: item.score, reverse=True)
+        scored.sort(key=lambda fact: fact.score, reverse=True)
         return scored[:top_k]
 
     def answer(self, query: str, top_k: int = 5, reasoning: Optional[ReasoningLog] = None) -> Mapping[str, object]:
         retrieved = self.retrieve(query, top_k=top_k)
         if reasoning is not None:
-            reasoning.add_step("retrieve", f"found {len(retrieved)} supporting facts", [fact.node.id for fact in retrieved], confidence=0.6)
+            reasoning.add_step(
+                "retrieve",
+                f"found {len(retrieved)} supporting facts",
+                [fact.node.id for fact in retrieved],
+                confidence=0.6,
+            )
         summary = self._summarise(query, retrieved)
         support = [fact.as_dict() for fact in retrieved]
         verification = self.verify_sources(support)
         if reasoning is not None:
-            reasoning.add_step("verify", verification["message"], [fact.node.id for fact in retrieved], confidence=verification["confidence"])
+            reasoning.add_step(
+                "verify",
+                verification["message"],
+                [fact.node.id for fact in retrieved],
+                confidence=verification.get("confidence", 0.0),
+            )
         return {
             "query": query,
             "summary": summary,
@@ -60,21 +70,15 @@ class RAGPipeline:
 
     def verify_sources(self, support: Iterable[Mapping[str, object]]) -> Mapping[str, object]:
         missing = []
-
         conflicts = []
-        conflicting_nodes = set()
-        for source, target in self.graph.detect_conflicts():
-            conflicting_nodes.add(source)
-            conflicting_nodes.add(target)
-
+        conflict_nodes = {node_id for pair in self.graph.detect_conflicts() for node_id in pair}
         for item in support:
             node_id = str(item.get("id")) if item.get("id") is not None else None
             sources = item.get("sources", [])
             if not sources:
                 missing.append(node_id)
-            if node_id and node_id in conflicting_nodes:
+            if node_id and node_id in conflict_nodes:
                 conflicts.append(node_id)
-
         if conflicts:
             return {
                 "status": "conflict",
@@ -83,17 +87,10 @@ class RAGPipeline:
                 "confidence": 0.1,
                 "message": f"conflicting evidence detected for {len(conflicts)} facts",
             }
-
-        for item in support:
-            sources = item.get("sources", [])
-            if not sources:
-                missing.append(item.get("id"))
-
         if missing:
             return {
                 "status": "partial",
                 "missing": missing,
-
                 "conflicts": conflicts,
                 "confidence": 0.2,
                 "message": f"missing sources for {len(missing)} facts",
@@ -101,19 +98,13 @@ class RAGPipeline:
         return {
             "status": "ok",
             "missing": [],
-            "conflicts": [],
+            "conflicts": conflicts,
             "confidence": 0.9,
             "message": "all facts have sources",
         }
 
-                "confidence": 0.2,
-                "message": f"missing sources for {len(missing)} facts",
-            }
-        return {"status": "ok", "missing": [], "confidence": 0.9, "message": "all facts have sources"}
-
-
     @staticmethod
-    def _dot(left: List[float], right: List[float]) -> float:
+    def _dot(left: Sequence[float], right: Sequence[float]) -> float:
         return float(sum(l * r for l, r in zip(left, right)))
 
     def _summarise(self, query: str, facts: List[RetrievedFact]) -> str:
@@ -121,7 +112,7 @@ class RAGPipeline:
             return "no supporting knowledge found"
         lines = [f"Answering: {query}"]
         for fact in facts:
-            snippet = fact.node.text.strip().replace("\n", " ")
+            snippet = fact.node.text.replace("\n", " ").strip()
             lines.append(f"- {snippet} (confidence={fact.node.confidence:.2f})")
         return "\n".join(lines)
 
