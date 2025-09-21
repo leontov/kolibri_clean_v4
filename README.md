@@ -29,7 +29,8 @@ Kolibri Clean v4 — это эталонная реализация журнал
    материалы и даёт обзор потоков.
 2. Настройте окружение по инструкции из
    [developer-handbook](docs/developer_handbook.md).
-3. Соберите и запустите журнал с помощью `make` или `./build_macos.sh`,
+3. Соберите и запустите журнал с помощью `make bin/kolibri_run` или
+   `./build_macos.sh bin/kolibri_run` (Makefile требует полный путь к цели),
    затем воспроизведите базовый сценарий, следуя
    [runtime-operations](docs/runtime_and_operations.md).
 4. Перед изменениями сверяйтесь с [roadmap](docs/roadmap.md) и
@@ -39,7 +40,7 @@ Kolibri Clean v4 — это эталонная реализация журнал
 
 ### macOS
 ```bash
-./build_macos.sh
+./build_macos.sh bin/kolibri_run
 # без ключа
 unset KOLIBRI_HMAC_KEY
 ./bin/kolibri_run configs/kolibri.json
@@ -52,7 +53,7 @@ unset KOLIBRI_HMAC_KEY
 ### Ubuntu / Debian
 ```bash
 sudo apt-get update && sudo apt-get install -y build-essential libssl-dev pkg-config
-make -j"$(nproc)"
+make -j"$(nproc)" bin/kolibri_run
 ```
 
 Команда `make tests` собирает вспомогательные бинарники и прогоняет
