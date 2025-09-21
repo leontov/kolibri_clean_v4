@@ -2,6 +2,38 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+
+from datetime import datetime
+import hashlib
+import json
+from collections.abc import Iterable as IterableABC
+from typing import Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
+
+from kolibri_x.core.encoders import (
+    ASREncoder,
+    AdaptiveAudioEncoder,
+    AdaptiveCrossModalTransformer,
+    DiffusionVisionEncoder,
+    FusionTransformer,
+    ImageEncoder,
+    ModalitySignal,
+    SensorEvent,
+    SensorHub,
+    TemporalAlignmentEngine,
+    TextEncoder,
+)
+from kolibri_x.core.planner import NeuroSemanticPlanner, Plan, PlanStep
+from kolibri_x.kg.graph import KnowledgeGraph
+from kolibri_x.kg.rag import RAGPipeline
+from kolibri_x.kg.ingest import IngestionReport, KnowledgeDocument, KnowledgeIngestor
+from kolibri_x.personalization import EmpathyContext, EmpathyModulator, InteractionSignal, OnDeviceProfiler
+from kolibri_x.privacy.consent import PrivacyOperator
+from kolibri_x.runtime.cache import OfflineCache
+from kolibri_x.runtime.iot import IoTBridge, IoTCommand
+from kolibri_x.runtime.journal import ActionJournal, JournalEntry
+from kolibri_x.runtime.workflow import ReminderEvent, ReminderRule, Workflow, WorkflowManager
+from kolibri_x.skills.store import SkillPolicyViolation, SkillStore
+
 import hashlib
 import json
 from typing import Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
@@ -15,6 +47,7 @@ from kolibri_x.privacy.consent import PrivacyOperator
 from kolibri_x.runtime.cache import OfflineCache
 from kolibri_x.runtime.journal import ActionJournal, JournalEntry
 from kolibri_x.skills.store import SkillStore
+
 from kolibri_x.xai.reasoning import ReasoningLog
 
 
@@ -56,6 +89,9 @@ class RuntimeRequest:
     hints: Sequence[str] = field(default_factory=tuple)
     signals: Sequence[InteractionSignal] = field(default_factory=tuple)
     empathy: EmpathyContext = field(default_factory=EmpathyContext)
+
+    data_tags: Sequence[str] = field(default_factory=tuple)
+
     top_k: int = 5
 
 
@@ -98,7 +134,14 @@ class KolibriRuntime:
         text_encoder: Optional[TextEncoder] = None,
         asr: Optional[ASREncoder] = None,
         image_encoder: Optional[ImageEncoder] = None,
+
+        audio_encoder: Optional[AdaptiveAudioEncoder] = None,
+        vision_encoder: Optional[DiffusionVisionEncoder] = None,
         fusion: Optional[FusionTransformer] = None,
+        cross_fusion: Optional[AdaptiveCrossModalTransformer] = None,
+
+        fusion: Optional[FusionTransformer] = None,
+
         planner: Optional[NeuroSemanticPlanner] = None,
         rag: Optional[RAGPipeline] = None,
         skill_store: Optional[SkillStore] = None,
@@ -108,12 +151,28 @@ class KolibriRuntime:
         empathy: Optional[EmpathyModulator] = None,
         cache: Optional[OfflineCache] = None,
         journal: Optional[ActionJournal] = None,
+
+        iot_bridge: Optional[IoTBridge] = None,
+        workflow_manager: Optional[WorkflowManager] = None,
+        knowledge_ingestor: Optional[KnowledgeIngestor] = None,
+        sensor_hub: Optional[SensorHub] = None,
+        alignment_engine: Optional[TemporalAlignmentEngine] = None,
+        fusion_budget: float = 1.5,
+
     ) -> None:
         self.graph = graph or KnowledgeGraph()
         self.text_encoder = text_encoder or TextEncoder(dim=32)
         self.asr = asr or ASREncoder()
         self.image_encoder = image_encoder or ImageEncoder(dim=32)
+
+        self.audio_encoder = audio_encoder or AdaptiveAudioEncoder(dim=16)
+        self.vision_encoder = vision_encoder or DiffusionVisionEncoder(dim=32, frame_window=4)
         self.fusion = fusion or FusionTransformer(dim=32)
+        self.cross_fusion = cross_fusion
+        self.fusion_budget = fusion_budget
+
+        self.fusion = fusion or FusionTransformer(dim=32)
+
         self.planner = planner or NeuroSemanticPlanner()
         self.skill_store = skill_store or SkillStore()
         self.sandbox = sandbox or SkillSandbox()
@@ -122,17 +181,43 @@ class KolibriRuntime:
         self.empathy = empathy or EmpathyModulator()
         self.cache = cache
         self.journal = journal or ActionJournal()
+
+        self.iot_bridge = iot_bridge
+        self.workflow_manager = workflow_manager or WorkflowManager()
+        self.ingestor = knowledge_ingestor or KnowledgeIngestor()
         self.rag = rag or RAGPipeline(self.graph, encoder=self.text_encoder)
+        self.sensor_hub = sensor_hub or SensorHub()
+        self.alignment_engine = alignment_engine or TemporalAlignmentEngine()
+
+        self.rag = rag or RAGPipeline(self.graph, encoder=self.text_encoder)
+
         skills = self.skill_store.list()
         if skills:
             self.planner.register_skills(skills)
+
+
+        if self.iot_bridge and self.iot_bridge.journal is None:
+            # Reuse the runtime journal when the bridge wasn't initialised with one.
+            self.iot_bridge.journal = self.journal
+
 
     def process(self, request: RuntimeRequest) -> RuntimeResponse:
         reasoning = ReasoningLog()
         filtered_modalities = self._enforce_privacy(request.user_id, request.modalities, reasoning)
         transcript = self._compose_transcript(filtered_modalities)
+
+        embeddings, signals = self._encode_modalities(
+            request.user_id, filtered_modalities, transcript, reasoning
+        )
+        fusion_result = None
+        if signals and self.cross_fusion:
+            fusion_result = self.cross_fusion.fuse(signals, budget=self.fusion_budget)
+        elif embeddings:
+            fusion_result = self.fusion.fuse(embeddings)
+
         embeddings = self._encode_modalities(filtered_modalities, transcript, reasoning)
         fusion_result = self.fusion.fuse(embeddings) if embeddings else None
+
         if fusion_result:
             self.journal.append(
                 "fusion",
@@ -149,7 +234,17 @@ class KolibriRuntime:
                 confidence=0.6,
             )
 
+
+        cache_key = self._cache_key(
+            request.user_id,
+            request.goal,
+            filtered_modalities,
+            transcript,
+            request.data_tags,
+        )
+
         cache_key = self._cache_key(request.user_id, request.goal, filtered_modalities, transcript)
+
         cached_payload = self.cache.get(cache_key) if self.cache else None
         if cached_payload:
             plan = self._plan_from_dict(cached_payload["plan"])
@@ -222,6 +317,88 @@ class KolibriRuntime:
             cached=False,
         )
 
+
+    def dispatch_iot_command(
+        self,
+        session_id: str,
+        command: IoTCommand,
+        *,
+        confirmer: Optional[Callable[[IoTCommand], bool]] = None,
+    ) -> Mapping[str, object]:
+        """Routes IoT commands through the policy bridge with journalling."""
+
+        if not self.iot_bridge:
+            raise RuntimeError("IoT bridge not configured")
+        acknowledgement = self.iot_bridge.dispatch(session_id, command, confirmer=confirmer)
+        self.journal.append(
+            "runtime_iot_dispatch",
+            {
+                "session_id": session_id,
+                "device_id": command.device_id,
+                "action": command.action,
+                "status": acknowledgement.get("status"),
+            },
+        )
+        return acknowledgement
+
+    def ingest_document(self, document: KnowledgeDocument) -> IngestionReport:
+        """Adds a document to the knowledge graph via the ingestor."""
+
+        report = self.ingestor.ingest(document, self.graph)
+        self.journal.append(
+            "knowledge_ingest",
+            {
+                "document_id": document.doc_id,
+                "nodes_added": report.nodes_added,
+                "edges_added": report.edges_added,
+                "conflicts": list(report.conflicts),
+                "warnings": list(report.warnings),
+            },
+        )
+        return report
+
+    def schedule_workflow(
+        self,
+        goal: str,
+        steps: Iterable[Mapping[str, str | None]],
+        *,
+        deadline: Optional[datetime] = None,
+        reminders: Optional[Sequence[ReminderRule]] = None,
+        metadata: Optional[Mapping[str, str]] = None,
+    ) -> Workflow:
+        workflow = self.workflow_manager.create_workflow(
+            goal=goal,
+            steps=steps,
+            deadline=deadline,
+            reminders=reminders,
+            metadata=metadata,
+        )
+        self.journal.append(
+            "workflow_created",
+            {
+                "workflow_id": workflow.id,
+                "goal": workflow.goal,
+                "deadline": workflow.deadline.isoformat() if workflow.deadline else None,
+                "step_count": len(workflow.steps),
+            },
+        )
+        return workflow
+
+    def emit_workflow_reminders(self, timestamp: Optional[datetime] = None) -> Sequence[ReminderEvent]:
+        events = self.workflow_manager.emit_reminders(timestamp=timestamp)
+        for event in events:
+            self.journal.append(
+                "workflow_reminder",
+                {
+                    "workflow_id": event.workflow_id,
+                    "scheduled_for": event.scheduled_for.isoformat(),
+                    "message": event.message,
+                },
+            )
+        return events
+
+
+
     def _enforce_privacy(
         self,
         user_id: str,
@@ -254,6 +431,51 @@ class KolibriRuntime:
 
     def _encode_modalities(
         self,
+
+        user_id: str,
+        modalities: Mapping[str, object],
+        transcript: str,
+        reasoning: ReasoningLog,
+    ) -> Tuple[Mapping[str, Sequence[float]], Sequence[ModalitySignal]]:
+        embeddings: MutableMapping[str, Sequence[float]] = {}
+        signals: List[ModalitySignal] = []
+        if transcript:
+            text_embedding = self.text_encoder.encode(transcript)
+            embeddings["text"] = text_embedding
+            signals.append(ModalitySignal(name="text", embedding=text_embedding, quality=0.9))
+        audio_value = modalities.get("audio")
+        if isinstance(audio_value, (list, tuple)):
+            audio_embedding = self.audio_encoder.encode(audio_value, user_id=user_id)
+            embeddings["audio"] = audio_embedding
+            signals.append(ModalitySignal(name="audio", embedding=audio_embedding, quality=0.7))
+        image_value = modalities.get("image")
+        if image_value is not None:
+            image_embedding = self.image_encoder.encode(image_value)
+            embeddings["image"] = image_embedding
+            signals.append(ModalitySignal(name="image", embedding=image_embedding, quality=0.6))
+        video_value = modalities.get("video")
+        if isinstance(video_value, IterableABC):
+            video_embedding = self.vision_encoder.encode_video(video_value)
+            embeddings["video"] = video_embedding
+            signals.append(ModalitySignal(name="video", embedding=video_embedding, quality=0.8))
+        sensor_payload = modalities.get("sensors")
+        if isinstance(sensor_payload, IterableABC):
+            for raw in sensor_payload:
+                if isinstance(raw, SensorEvent):
+                    event = raw
+                else:
+                    event = SensorEvent(**raw)
+                self.sensor_hub.ingest(event)
+            sequences = self.sensor_hub.to_sequences()
+            aligned = self.alignment_engine.align(sequences)
+            reasoning.add_step(
+                "sensor_alignment",
+                f"aligned {len(aligned)} sensor streams",
+                list(aligned.keys()),
+                confidence=0.5,
+            )
+        return embeddings, signals
+
         modalities: Mapping[str, object],
         transcript: str,
         reasoning: ReasoningLog,
@@ -265,6 +487,7 @@ class KolibriRuntime:
         if image_value is not None:
             embeddings["image"] = self.image_encoder.encode(image_value)
         return embeddings
+
 
     def _execute_plan(
         self,
@@ -301,6 +524,9 @@ class KolibriRuntime:
 
         try:
             self.skill_store.require_permissions(step.skill, manifest.permissions)
+
+            self.skill_store.enforce_policy(step.skill, request.data_tags)
+
             sandbox_payload = {
                 "goal": request.goal,
                 "step": step.description,
@@ -313,6 +539,15 @@ class KolibriRuntime:
                 "skill_executed",
                 {"step_id": step.id, "skill": step.skill, "result_keys": sorted(result.keys())},
             )
+
+        except SkillPolicyViolation as exc:
+            payload = {"status": "policy_blocked", "reason": str(exc), "policy": exc.policy}
+            reasoning.add_step("skill_policy", f"{step.skill} blocked by policy", [step.id], confidence=0.2)
+            self.journal.append(
+                "skill_policy_blocked",
+                {"step_id": step.id, "skill": step.skill, "policy": exc.policy, "requirement": exc.requirement},
+            )
+
         except Exception as exc:  # pragma: no cover - defensive path
             payload = {"status": "error", "message": str(exc)}
             reasoning.add_step("skill_error", f"{step.skill} failed", [step.id], confidence=0.1)
@@ -341,6 +576,8 @@ class KolibriRuntime:
         goal: str,
         modalities: Mapping[str, object],
         transcript: str,
+        tags: Sequence[str],
+
     ) -> str:
         canonical_modalities: MutableMapping[str, object] = {}
         for key, value in modalities.items():
@@ -350,6 +587,9 @@ class KolibriRuntime:
             "goal": goal,
             "modalities": canonical_modalities,
             "transcript": transcript,
+
+            "tags": sorted(tags),
+
         }
         digest = json.dumps(payload, sort_keys=True, ensure_ascii=False)
         return hashlib.sha256(digest.encode("utf-8")).hexdigest()

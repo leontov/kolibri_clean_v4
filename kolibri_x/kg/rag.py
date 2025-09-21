@@ -60,18 +60,57 @@ class RAGPipeline:
 
     def verify_sources(self, support: Iterable[Mapping[str, object]]) -> Mapping[str, object]:
         missing = []
+
+        conflicts = []
+        conflicting_nodes = set()
+        for source, target in self.graph.detect_conflicts():
+            conflicting_nodes.add(source)
+            conflicting_nodes.add(target)
+
+        for item in support:
+            node_id = str(item.get("id")) if item.get("id") is not None else None
+            sources = item.get("sources", [])
+            if not sources:
+                missing.append(node_id)
+            if node_id and node_id in conflicting_nodes:
+                conflicts.append(node_id)
+
+        if conflicts:
+            return {
+                "status": "conflict",
+                "conflicts": conflicts,
+                "missing": missing,
+                "confidence": 0.1,
+                "message": f"conflicting evidence detected for {len(conflicts)} facts",
+            }
+
         for item in support:
             sources = item.get("sources", [])
             if not sources:
                 missing.append(item.get("id"))
+
         if missing:
             return {
                 "status": "partial",
                 "missing": missing,
+
+                "conflicts": conflicts,
+                "confidence": 0.2,
+                "message": f"missing sources for {len(missing)} facts",
+            }
+        return {
+            "status": "ok",
+            "missing": [],
+            "conflicts": [],
+            "confidence": 0.9,
+            "message": "all facts have sources",
+        }
+
                 "confidence": 0.2,
                 "message": f"missing sources for {len(missing)} facts",
             }
         return {"status": "ok", "missing": [], "confidence": 0.9, "message": "all facts have sources"}
+
 
     @staticmethod
     def _dot(left: List[float], right: List[float]) -> float:
