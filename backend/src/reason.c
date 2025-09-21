@@ -35,7 +35,6 @@ int rb_payload_json(const ReasonBlock* b, char* buf, size_t n){
     for(int i=0;i<10;i++){
         off += snprintf(buf+off, n-off, "%.17g%s", b->votes[i], (i<9)?",":"]");
     }
-    off += snprintf(buf+off, n-off, "}");
 
     off += snprintf(buf+off, n-off, ",\"vote_softmax\":%.17g,\"vote_median\":%.17g,",
                     b->vote_softmax, b->vote_median);
