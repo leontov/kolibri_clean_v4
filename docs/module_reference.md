@@ -34,7 +34,13 @@
 
 ### `kolibri_x/core`
 - `encoders.py` — базовые и адаптивные энкодеры текста, аудио, изображений,
-  сенсоров; контроллер разрешения и временной выравниватель.
+  сенсоров; контроллер разрешения и временной выравниватель. Расширяется
+  `NoiseProfiler`, `SpeakerAdaptor`, `SensorNormalizer` согласно
+  [multimodal_core](multimodal_core.md).
+- `transformer.py` — FusionTransformer с `DynamicDepthController`,
+  перекрёстным вниманием и `LatencyMonitor`.
+- `vision.py` — диффузионный визуальный энкодер и `OnlineTokenizer` для
+  компрессии видеопотоков.
 - `planner.py` — нейро-семантический планировщик, структуры Plan/PlanStep.
 
 ### `kolibri_x/kg`

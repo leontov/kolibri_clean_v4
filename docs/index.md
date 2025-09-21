@@ -9,6 +9,7 @@
 | --- | --- |
 | [project-overview](project_overview.md) | Видение платформы, ключевые принципы и пользовательские сценарии. |
 | [architecture](architecture.md) | Техническая архитектура Kolibri-x и системные потоки. |
+| [multimodal_core](multimodal_core.md) | План развития ядра мультимодальной обработки и обучения. |
 | [developer_handbook](developer_handbook.md) | Процессы разработки, подготовка окружения, стандарты коммитов. |
 | [runtime_and_operations](runtime_and_operations.md) | Инструкции по запуску, конфигурации, логированию и верификации. |
 | [module_reference](module_reference.md) | Путеводитель по директориям репозитория и API модулей. |
