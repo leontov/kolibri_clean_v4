@@ -39,7 +39,15 @@ def main() -> None:
     if payload.count("}") != 1:
         raise AssertionError("payload must contain exactly one closing brace")
 
-    if payload.count("]") != 1:
+    if '"votes":[' not in payload:
+        raise AssertionError("missing votes array")
+    votes_section = payload.split('"votes":[', 1)[1]
+    closing_index = votes_section.find("]")
+    if closing_index == -1:
+        raise AssertionError("votes array missing closing bracket")
+    post_votes = votes_section[closing_index + 1 :]
+    before_next_key = post_votes.split('"vote_softmax"', 1)[0]
+    if "]" in before_next_key:
         raise AssertionError("votes array must close exactly once")
 
     if len(data.get("votes", [])) != 10:
