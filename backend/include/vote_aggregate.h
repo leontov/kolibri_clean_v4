@@ -1,6 +1,16 @@
 #ifndef KOLIBRI_VOTE_AGGREGATE_H
 #define KOLIBRI_VOTE_AGGREGATE_H
 
+
+#include "digit_agents.h"
+
+typedef struct {
+    double depth_decay;   // contribution from deeper hierarchy layers (0..1)
+    double quorum;        // activation threshold
+} VotePolicy;
+
+void vote_apply_policy(VoteState* state, const VotePolicy* policy);
+
 #include "config.h"
 #include <stddef.h>
 
@@ -24,5 +34,6 @@ void vote_apply_policy(double votes[10], const VotePolicy* policy);
 #ifdef __cplusplus
 }
 #endif
+
 
 #endif

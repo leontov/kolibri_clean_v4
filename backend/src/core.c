@@ -1,7 +1,13 @@
 #include "core.h"
 #include "dsl.h"
 #include "chainio.h"
+
+#include "digit_agents.h"
 #include "vote_aggregate.h"
+#include <stdbool.h>
+
+#include "vote_aggregate.h"
+
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -307,10 +313,45 @@ static void compute_merkle(const char* prev_merkle, ReasonBlock* b){
     free(buf);
 }
 
-static Formula* propose(const double vote[10], uint64_t seed){
+static DigitField g_digit_field;
+static bool g_digit_field_ready = false;
+
+static void digit_field_shutdown(void) {
+    if (g_digit_field_ready) {
+        digit_field_free(&g_digit_field);
+        g_digit_field_ready = false;
+    }
+}
+
+static bool ensure_digit_field(const kolibri_config_t* cfg) {
+    if (g_digit_field_ready) {
+        return true;
+    }
+    if (!digit_field_init(&g_digit_field, cfg->depth_max > 0 ? cfg->depth_max : 1, cfg->seed)) {
+        return false;
+    }
+    atexit(digit_field_shutdown);
+    g_digit_field_ready = true;
+    return true;
+}
+
+static Formula* propose_formula(const VoteState* state, uint64_t seed){
     uint64_t s=seed;
     int choice=(int)floor(prng01(&s)*6.0);
     switch(choice){
+
+        case 0:
+            return f_add(f_x(), f_sin(f_x()));
+        case 1:
+            return f_sin(f_mul(f_const(0.1 + 2.9*state->vote[2]), f_x()));
+        case 2:
+            return f_add(f_mul(f_const(-2+4*state->vote[0]), f_sin(f_x())),
+                         f_mul(f_const(-1+2*state->vote[1]), f_x()));
+        case 3:
+            return f_const(-1+2*state->vote[3]);
+        default:
+            return f_const(-2+4*state->vote[4]);
+
         case 0: return f_add(f_x(), f_sin(f_x()));
         case 1: return f_sigmoid(f_add(f_param(0), f_mul(f_param(1), f_x())));
         case 2: return f_add(f_mul(f_const(-2+4*vote[0]), f_sin(f_x())),
@@ -318,6 +359,7 @@ static Formula* propose(const double vote[10], uint64_t seed){
         case 3: return f_max(f_abs(f_x()), f_const(vote[2]));
         case 4: return f_add(f_exp(f_mul(f_const(0.2), f_x())), f_param(2));
         default: return f_tanh(f_add(f_param(0), f_mul(f_param(1), f_x())));
+
     }
 }
 
@@ -328,11 +370,30 @@ bool kolibri_step(const kolibri_config_t* cfg, int step, const char* prev_hash,
     out->step=step; out->parent=(step>0)?(step-1):0; out->seed=cfg->seed^((uint64_t)step);
     strncpy(out->fmt, "dsl-v1", sizeof(out->fmt)-1);
 
+
+    if (!ensure_digit_field(cfg)) {
+        return false;
+    }
+
+    digit_tick(&g_digit_field);
+
+    VoteState vote_state;
+    memset(&vote_state, 0, sizeof(vote_state));
+    digit_aggregate(&g_digit_field, &vote_state);
+    vote_state.temperature = cfg->temperature;
+
+    VotePolicy policy = { cfg->depth_decay, cfg->quorum };
+    vote_apply_policy(&vote_state, &policy);
+
+    for (int i = 0; i < 10; ++i) {
+        out->votes[i] = vote_state.vote[i];
+
     uint64_t s=out->seed;
     for(int i=0;i<10;i++){
         double r = prng01(&s);
         out->votes[i] = 0.5 + 0.5*cos(step*0.17 + r*6.28318);
         if(out->votes[i] < cfg->quorum) out->votes[i]=0.0;
+
     }
     out->vote_softmax = vote_softmax_avg(out->votes, cfg->temperature);
     out->vote_median = vote_weighted_median(out->votes);
@@ -359,6 +420,10 @@ bool kolibri_step(const kolibri_config_t* cfg, int step, const char* prev_hash,
     vote_apply_policy(out->votes, &policy);
 
 
+    Formula* f = propose_formula(&vote_state, out->seed);
+    out->eff = eff_of(f);
+    out->compl = (double)f_complexity(f);
+
     Formula* f = propose(out->votes, out->seed);
     EvalResult er = evaluate_formula(f);
     out->eff = er.eff;
@@ -366,6 +431,7 @@ bool kolibri_step(const kolibri_config_t* cfg, int step, const char* prev_hash,
     out->param_count = (int)er.param_count;
     for(size_t i=0;i<er.param_count;i++) out->params[i]=er.params[i];
     for(size_t i=0;i<BENCH_COUNT;i++) out->bench_eff[i]=er.bench_eff[i];
+
     f_render(f, out->formula, sizeof(out->formula));
 
     update_memory(step, out->formula, out->eff, out->compl);
