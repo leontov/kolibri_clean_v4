@@ -102,7 +102,7 @@ int kolibri_run_with_callback(kolibri_runtime_t *rt,
                               kolibri_event_callback cb,
                               void *cb_data);
 
-int kolibri_verify_file(const char *path, int verbose);
+int kolibri_verify_file(const char *path, const kolibri_config_t *cfg, int verbose);
 int kolibri_replay(const kolibri_config_t *cfg);
 
 int kolibri_parse_block_line(const char *line, size_t len, kolibri_payload_t *payload, char *hash_hex, char *hmac_hex);

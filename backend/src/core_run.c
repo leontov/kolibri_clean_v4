@@ -262,7 +262,7 @@ int kolibri_run_with_callback(kolibri_runtime_t *rt,
     }
 
     fclose(fp);
-    int verify_rc = kolibri_verify_file(log_path, 0);
+    int verify_rc = kolibri_verify_file(log_path, &rt->config, 0);
     if (verify_rc == 0) {
         char verify_buf[64];
         snprintf(verify_buf, sizeof(verify_buf), "{\"ok\":true,\"blocks\":%u}", steps);

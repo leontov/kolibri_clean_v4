@@ -25,7 +25,7 @@ logs/
 ### CLI commands
 
 - `kolibri run --config configs/kolibri.json --steps 30 --beam 1 --lambda 0.01 --fmt 5` – generate a 30 block chain.
-- `kolibri verify logs/chain.jsonl` – recompute hashes/HMAC and validate parent links.
+- `kolibri verify --config configs/kolibri.json logs/chain.jsonl` – recompute hashes/HMAC with the supplied config and validate parent links.
 - `kolibri replay --config configs/kolibri.json` – print a textual summary of the recorded chain.
 - `kolibri serve --port 8080 --static web/dist [--cors-dev]` – launch the HTTP API, SPA static file server and SSE stream.
 
@@ -94,7 +94,7 @@ The service worker performs cache-first for static bundles, stale-while-revalida
 
 - `tests/test_payload.c` – ensures canonical log format
 - `tests/test_fa.c` – validates FA-10 encoding/stability
-- `tests/test_verify_break.c` – verifies byte flips break the chain
+- `tests/test_verify_break.c` – ensures matching configs verify successfully and that HMAC/byte tampering breaks the chain
 
 ## Security & determinism notes
 

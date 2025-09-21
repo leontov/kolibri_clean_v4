@@ -53,8 +53,21 @@ int main(int argc, char **argv) {
         return 0;
     }
     if (strcmp(command, "verify") == 0) {
-        const char *path = (argc > 2) ? argv[2] : KOLIBRI_DEFAULT_LOG;
-        if (kolibri_verify_file(path, 1) != 0) {
+        const char *config_path = "configs/kolibri.json";
+        const char *path = KOLIBRI_DEFAULT_LOG;
+        for (int i = 2; i < argc; ++i) {
+            if (strcmp(argv[i], "--config") == 0 && i + 1 < argc) {
+                config_path = argv[++i];
+            } else {
+                path = argv[i];
+            }
+        }
+        kolibri_config_t cfg;
+        if (kolibri_load_config(config_path, &cfg) != 0) {
+            fprintf(stderr, "failed to load config %s\n", config_path);
+            return 1;
+        }
+        if (kolibri_verify_file(path, &cfg, 1) != 0) {
             return 1;
         }
         return 0;

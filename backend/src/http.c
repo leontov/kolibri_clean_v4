@@ -285,7 +285,7 @@ static void serve_verify(http_server_ctx_t *ctx, FILE *stream, const char *body)
     if (body) {
         sscanf(body, "%*[^\"path\"]\"path\":\"%255[^\"]\"", path);
     }
-    int rc = kolibri_verify_file(path, 0);
+    int rc = kolibri_verify_file(path, &ctx->runtime->config, 0);
     char response[320];
     snprintf(response, sizeof(response), "{\"ok\":%s,\"path\":\"%s\"}", rc == 0 ? "true" : "false", path);
     respond_json(stream, response, rc == 0 ? 200 : 400, ctx->config.cors_dev);
