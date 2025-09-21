@@ -49,7 +49,56 @@ const randomId = () => {
   return Math.random().toString(36).slice(2);
 };
 
-const API_BASE = "";
+const API_BASE = resolveApiBase();
+
+function resolveApiBase(): string {
+  const fromEnv = trimTrailingSlash(import.meta.env.VITE_API_BASE ?? "");
+  if (fromEnv) {
+    return fromEnv;
+  }
+
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  const globalWithApiBase = window as Window & {
+    __KOLIBRI_API_BASE__?: string;
+    __kolibriApiBase?: string;
+  };
+  const globalBase = trimTrailingSlash(
+    globalWithApiBase.__KOLIBRI_API_BASE__ ?? globalWithApiBase.__kolibriApiBase ?? ""
+  );
+  if (globalBase) {
+    return globalBase;
+  }
+
+  const meta = document.querySelector('meta[name="kolibri-api-base"]')?.getAttribute("content") ?? "";
+  const metaBase = trimTrailingSlash(meta);
+  if (metaBase) {
+    return metaBase;
+  }
+
+  const { pathname } = window.location;
+  const segments = pathname.split("/");
+  if (segments.length <= 1) {
+    return "";
+  }
+
+  if (segments[segments.length - 1] === "") {
+    segments.pop();
+  }
+
+  const baseSegments = segments.slice(0, -1);
+  const candidate = baseSegments.join("/") || "/";
+  if (candidate === "/" || candidate === "") {
+    return "";
+  }
+  return trimTrailingSlash(candidate);
+}
+
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, "");
+}
 
 export const useChatStore = create<ChatState>()(
   persist(
