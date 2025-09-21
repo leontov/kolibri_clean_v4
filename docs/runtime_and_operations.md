@@ -70,21 +70,36 @@
 
 Для интеграции Python-компонентов используйте `KolibriRuntime`:
 
-```python
+-```python
 from kolibri_x.runtime.orchestrator import KolibriRuntime, RuntimeRequest
 from kolibri_x.runtime.orchestrator import SkillSandbox
 
 sandbox = SkillSandbox()
-sandbox.register("echo", lambda payload: {"text": payload["text"].upper()})
+sandbox.register("echo", lambda payload: {"text": payload["goal"].upper()})
 
 runtime = KolibriRuntime(sandbox=sandbox)
-response = runtime.execute(RuntimeRequest(user_id="demo", goal="echo", modalities={"text": "hello"}))
-print(response.answer)
+runtime.privacy.grant("demo", ["text"])
+response = runtime.process(RuntimeRequest(user_id="demo", goal="echo", modalities={"text": "hello"}))
+print(response.answer["summary"])
 ```
 
 - Конфигурация runtime описана в [architecture](architecture.md).
 - Все внешние навыки должны регистрироваться в `SkillStore` или напрямую в
-  `SkillSandbox` (для тестов).
+  `SkillSandbox` (для тестов). Перед первым запросом выдавайте пользователю
+  разрешения на необходимые модальности через `runtime.privacy.grant`.
+
+### Консольный чат
+
+- Для быстрой проверки региструйте sandbox-навыки через новый CLI:
+
+  ```bash
+  python -m kolibri_x.cli.chat --user-id demo
+  ```
+
+- Поддерживаются команды `:journal`, `:reason`, `:quit`. Команда `:journal`
+  выводит последние события `ActionJournal`, `:reason` — текущий `ReasoningLog`.
+  Перед запуском можно прогрузить знания в граф аргументом
+  `--knowledge path/to/file_or_dir`.
 
 ## Офлайн-режим
 
