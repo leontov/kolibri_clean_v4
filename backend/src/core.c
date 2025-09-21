@@ -1,6 +1,7 @@
 #include "core.h"
 #include "dsl.h"
 #include "chainio.h"
+#include "vote_aggregate.h"
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -38,13 +39,26 @@ bool kolibri_step(const kolibri_config_t* cfg, int step, const char* prev_hash,
     memset(out,0,sizeof(*out));
     out->step=step; out->parent=step-1; out->seed=cfg->seed^((uint64_t)step);
 
-    // simple "votes": pseudo weights
-    uint64_t s=out->seed;
-    for(int i=0;i<10;i++){
-        double r = prng01(&s);
-        out->votes[i] = 0.5 + 0.5*cos(step*0.17 + r*6.28318);
-        if(out->votes[i] < cfg->quorum) out->votes[i]=0.0;
+    VotePolicy policy = vote_policy_from_config(cfg);
+
+    int depth_max = cfg->depth_max;
+    if(depth_max <= 0) depth_max = 1;
+
+    double (*depth_votes)[10] = calloc((size_t)depth_max, sizeof(*depth_votes));
+    if(depth_votes){
+        uint64_t s = out->seed;
+        for(int depth = 0; depth < depth_max; ++depth){
+            for(int i = 0; i < 10; ++i){
+                double r = prng01(&s);
+                depth_votes[depth][i] = 0.5 + 0.5*cos((step + depth)*0.17 + r*6.28318);
+            }
+        }
+
+        digit_aggregate(out->votes, &policy, (const double (*)[10])depth_votes,
+                        (size_t)depth_max);
+        free(depth_votes);
     }
+    vote_apply_policy(out->votes, &policy);
 
     Formula* f = propose(out->votes, out->seed);
     out->eff = eff_of(f);
