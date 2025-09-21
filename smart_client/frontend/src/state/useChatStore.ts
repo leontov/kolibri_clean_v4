@@ -79,14 +79,61 @@ function normalizeCandidate(value: string | null | undefined): string {
   return `/${trimTrailingSlash(trimmed)}`;
 }
 
+function normalizeBase(value: string): string {
+  const trimmed = trimTrailingSlash(value.trim());
+  if (!trimmed) {
+    return "";
+  }
+  if (/^(?:[a-z]+:)?\/\//i.test(trimmed)) {
+    return trimmed;
+  }
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+}
+
+function normalizePath(value: string): string {
+  const trimmed = trimTrailingSlash(value.trim());
+  if (!trimmed) {
+    return "";
+  }
+  return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+}
+
+function joinBaseAndPath(base: string, path: string): string {
+  if (!base) {
+    return path;
+  }
+  if (!path) {
+    return base;
+  }
+  if (/^(?:[a-z]+:)?\/\//i.test(path)) {
+    return path;
+  }
+  const sanitizedBase = base.replace(/\/+$/, "");
+  const sanitizedPath = path.replace(/^\/+/, "");
+  return `${sanitizedBase}/${sanitizedPath}`;
+}
+
+async function ensureApiBase(): Promise<string> {
+  if (resolvedApiBase !== null) {
+    return resolvedApiBase;
+  }
+  if (!resolvingApiBase) {
+    resolvingApiBase = resolveApiBase();
+  }
+  resolvedApiBase = await resolvingApiBase;
+  return resolvedApiBase;
+}
+
 function inferBaseFromLocation(): string {
   if (typeof window === "undefined") {
     return "";
   }
+
   const trimmedPath = trimTrailingSlash(window.location.pathname);
   if (!trimmedPath || trimmedPath === "/") {
     return "";
   }
+
   const segments = trimmedPath.split("/").filter(Boolean);
   if (segments.length === 0) {
     return "";
@@ -99,6 +146,21 @@ function inferBaseFromLocation(): string {
     return "";
   }
   return `/${segments.join("/")}`;
+}
+
+async function resolveApiBase(): Promise<string> {
+  const candidates = resolveApiBaseCandidates();
+  for (const base of candidates) {
+    try {
+      const response = await fetch(`${base}/status`, { method: "GET" });
+      if (response.ok) {
+        return base;
+      }
+    } catch (error) {
+      console.warn(`Kolibri API base candidate failed: ${base}`, error);
+    }
+  }
+  return candidates[candidates.length - 1] ?? "";
 }
 
 function resolveApiBaseCandidates(): string[] {
@@ -116,20 +178,14 @@ function resolveApiBaseCandidates(): string[] {
 
   addCandidate(import.meta.env.VITE_API_BASE ?? "");
 
-  if (typeof window !== "undefined") {
-    const globalWithApiBase = window as Window & {
-      __KOLIBRI_API_BASE__?: string;
-      __kolibriApiBase?: string;
-    };
-    addCandidate(globalWithApiBase.__KOLIBRI_API_BASE__ ?? globalWithApiBase.__kolibriApiBase ?? "");
+  const rawBaseCandidates = resolveRawBaseCandidates();
+  const apiPathCandidates = resolveApiPathCandidates();
 
-    const meta = document
-      .querySelector('meta[name="kolibri-api-base"]')
-      ?.getAttribute("content");
-    addCandidate(meta ?? "");
-
-    addCandidate(import.meta.env.BASE_URL ?? "");
-    addCandidate(inferBaseFromLocation());
+  for (const rawBase of rawBaseCandidates) {
+    addCandidate(rawBase);
+    for (const apiPath of apiPathCandidates) {
+      addCandidate(joinBaseAndPath(rawBase, apiPath));
+    }
   }
 
   addCandidate("");
@@ -137,32 +193,79 @@ function resolveApiBaseCandidates(): string[] {
   return candidates;
 }
 
-async function detectApiBase(): Promise<string> {
-  const candidates = resolveApiBaseCandidates();
-  for (const base of candidates) {
-    try {
-      const response = await fetch(`${base}/api/v1/status`, { method: "GET" });
-      if (response.ok) {
-        return base;
-      }
-    } catch (error) {
-      console.warn(`Kolibri API base candidate failed: ${base}`, error);
+function resolveRawBaseCandidates(): string[] {
+  const rawBases: string[] = [];
+
+  const addBase = (value: string) => {
+    if (!value || rawBases.includes(value)) {
+      return;
     }
+    rawBases.push(value);
+  };
+
+  addBase(normalizeBase(import.meta.env.VITE_API_BASE ?? ""));
+
+  if (typeof window !== "undefined") {
+    const globalWithApiBase = window as Window & {
+      __KOLIBRI_API_BASE__?: string;
+      __kolibriApiBase?: string;
+    };
+
+    addBase(
+      normalizeBase(
+        globalWithApiBase.__KOLIBRI_API_BASE__ ?? globalWithApiBase.__kolibriApiBase ?? "",
+      ),
+    );
+
+    const meta = document
+      .querySelector('meta[name="kolibri-api-base"]')
+      ?.getAttribute("content");
+
+    addBase(normalizeBase(meta ?? ""));
+    addBase(normalizeBase(import.meta.env.BASE_URL ?? ""));
+    addBase(inferBaseFromLocation());
   }
-  return candidates[candidates.length - 1] ?? "";
+
+  addBase("");
+
+  return rawBases;
 }
 
-async function ensureApiBase(): Promise<string> {
-  if (resolvedApiBase !== null) {
-    return resolvedApiBase;
+function resolveApiPathCandidates(): string[] {
+  const apiPaths: string[] = [];
+
+  const addPath = (value: string) => {
+    if (apiPaths.includes(value)) {
+      return;
+    }
+    apiPaths.push(value);
+  };
+
+  addPath(normalizePath(import.meta.env.VITE_API_PREFIX ?? ""));
+
+  if (typeof window !== "undefined") {
+    const globalWithPrefix = window as Window & {
+      __KOLIBRI_API_PREFIX__?: string;
+      __kolibriApiPrefix?: string;
+    };
+    addPath(
+      normalizePath(
+        globalWithPrefix.__KOLIBRI_API_PREFIX__ ?? globalWithPrefix.__kolibriApiPrefix ?? "",
+      ),
+    );
+
+    const meta = document
+      .querySelector('meta[name="kolibri-api-prefix"]')
+      ?.getAttribute("content");
+    addPath(normalizePath(meta ?? ""));
   }
-  if (!resolvingApiBase) {
-    resolvingApiBase = detectApiBase().then(base => {
-      resolvedApiBase = base;
-      return base;
-    });
-  }
-  return resolvingApiBase;
+
+  addPath("/api/v1");
+  addPath("/v1");
+  addPath("/api");
+  addPath("");
+
+  return apiPaths;
 }
 
 function extractSources(content: string): SourceItem[] | undefined {
@@ -179,6 +282,9 @@ function selectToolPayload(data: Record<string, unknown>): unknown {
   }
   if ("result" in data) {
     return data.result;
+  }
+  if ("parameters" in data) {
+    return data.parameters;
   }
   return data;
 }
@@ -203,16 +309,22 @@ export const useChatStore = create<ChatState>()(
           chatStream: existingChatStream,
           chainStream: existingChainStream,
         } = get();
-        if (connected && existingChatStream && existingChatStream.readyState !== EventSource.CLOSED) {
+
+        if (
+          connected &&
+          existingChatStream &&
+          existingChatStream.readyState !== EventSource.CLOSED
+        ) {
           return;
         }
+
         existingChatStream?.close();
         existingChainStream?.close();
 
         void ensureApiBase()
           .then(apiBase => {
             const chatStream = new EventSource(
-              `${apiBase}/api/v1/chat/stream?session_id=${sessionId}`,
+              `${apiBase}/chat/stream?session_id=${sessionId}`,
             );
             let currentAssistantId: string | null = null;
 
@@ -239,13 +351,16 @@ export const useChatStore = create<ChatState>()(
                     pending: true,
                   });
                 }
-                const idx = messages.findIndex(msg => msg.id === currentAssistantId);
-                if (idx >= 0) {
-                  messages[idx] = {
-                    ...messages[idx],
-                    content: `${messages[idx].content}${data.content}`,
+
+                const index = messages.findIndex(message => message.id === currentAssistantId);
+                if (index >= 0) {
+                  const current = messages[index];
+                  messages[index] = {
+                    ...current,
+                    content: `${current.content}${data.content}`,
                   };
                 }
+
                 return { messages };
               });
             });
@@ -261,7 +376,11 @@ export const useChatStore = create<ChatState>()(
                   {
                     id: randomId(),
                     role: "tool",
-                    content: typeof payload === "string" ? payload : JSON.stringify(payload, null, 2),
+                    content:
+                      typeof payload === "string"
+                        ? payload
+                        : JSON.stringify(payload, null, 2),
+                    pending: false,
                     toolName: typeof raw.name === "string" ? raw.name : undefined,
                     toolPayload: payload,
                   },
@@ -274,10 +393,10 @@ export const useChatStore = create<ChatState>()(
               set(state => {
                 const messages = [...state.messages];
                 if (currentAssistantId) {
-                  const idx = messages.findIndex(msg => msg.id === currentAssistantId);
-                  if (idx >= 0) {
-                    messages[idx] = {
-                      ...messages[idx],
+                  const index = messages.findIndex(message => message.id === currentAssistantId);
+                  if (index >= 0) {
+                    messages[index] = {
+                      ...messages[index],
                       content: data.content,
                       pending: false,
                       sources: extractSources(data.content),
@@ -297,9 +416,10 @@ export const useChatStore = create<ChatState>()(
               });
             });
 
-            const chainStream = new EventSource(`${apiBase}/api/v1/chain/stream`);
+            const chainStream = new EventSource(`${apiBase}/chain/stream`);
+
             chainStream.addEventListener("block", event => {
-              const data = JSON.parse((event as MessageEvent).data);
+              const data = JSON.parse((event as MessageEvent).data) as ChainBlock;
               set(state => ({
                 chain: [
                   {
@@ -335,7 +455,7 @@ export const useChatStore = create<ChatState>()(
         set(state => ({ messages: [...state.messages, message] }));
         try {
           const apiBase = await ensureApiBase();
-          await fetch(`${apiBase}/api/v1/chat`, {
+          await fetch(`${apiBase}/chat`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ session_id: sessionId, message: content }),
@@ -367,3 +487,4 @@ export const useChatStore = create<ChatState>()(
     },
   ),
 );
+
