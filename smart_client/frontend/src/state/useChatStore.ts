@@ -58,6 +58,16 @@ const randomId = () => {
   return Math.random().toString(36).slice(2);
 };
 
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, "");
+}
+
+
+function normalizeCandidate(value: string | null | undefined): string {
+  if (!value) {
+    return "";
+  }
+  const trimmed = value.trim();
 
 const KNOWN_APP_ROUTES = new Set(["chat", "ledger", "settings"]);
 
@@ -88,10 +98,21 @@ function normalizeCandidate(value: string | null | undefined): string {
   }
   const trimmed = value.trim();
 
+
   if (!trimmed) {
     return "";
   }
   if (/^(?:[a-z]+:)?\/\//i.test(trimmed)) {
+
+    return trimTrailingSlash(trimmed);
+  }
+  if (trimmed.startsWith("/")) {
+    return trimTrailingSlash(trimmed);
+  }
+  return `/${trimTrailingSlash(trimmed)}`;
+}
+
+
 
     return trimmed;
   }
@@ -137,6 +158,12 @@ function inferBaseFromLocation(): string {
     return "";
   }
 
+  const trimmedPath = trimTrailingSlash(window.location.pathname);
+  if (!trimmedPath || trimmedPath === "/") {
+    return "";
+  }
+
+
 
   const trimmedPath = window.location.pathname.replace(/\/+$/, "");
   if (!trimmedPath || trimmedPath === "/") {
@@ -149,11 +176,11 @@ function inferBaseFromLocation(): string {
     return "";
   }
 
+
   const segments = trimmedPath.split("/").filter(Boolean);
   if (segments.length === 0) {
     return "";
   }
-
   const lastSegment = segments[segments.length - 1];
   if (lastSegment.includes(".") || KNOWN_APP_ROUTES.has(lastSegment)) {
     segments.pop();
@@ -163,8 +190,8 @@ function inferBaseFromLocation(): string {
   if (segments.length === 0) {
     return "";
   }
-
   return `/${segments.join("/")}`;
+
 }
 
 async function resolveApiBase(): Promise<string> {
@@ -180,17 +207,23 @@ async function resolveApiBase(): Promise<string> {
     }
   }
   return candidates[candidates.length - 1] ?? "";
+
 }
 
 function resolveApiBaseCandidates(): string[] {
   const candidates: string[] = [];
-
   const addCandidate = (value: string) => {
-    if (!value || candidates.includes(value)) {
+    const normalized = normalizeCandidate(value);
+    if (normalized === "" && candidates.includes("")) {
       return;
     }
-    candidates.push(value);
+    if (normalized && candidates.includes(normalized)) {
+      return;
+    }
+    candidates.push(normalized);
   };
+
+  addCandidate(import.meta.env.VITE_API_BASE ?? "");
 
   const rawBaseCandidates = resolveRawBaseCandidates();
   const apiPathCandidates = resolveApiPathCandidates();
@@ -241,11 +274,15 @@ function resolveApiBaseCandidates(): string[] {
   addCandidate(import.meta.env.VITE_API_BASE ?? "");
 
 
+
   if (typeof window !== "undefined") {
     const globalWithApiBase = window as Window & {
       __KOLIBRI_API_BASE__?: string;
       __kolibriApiBase?: string;
     };
+
+    addCandidate(globalWithApiBase.__KOLIBRI_API_BASE__ ?? globalWithApiBase.__kolibriApiBase ?? "");
+
 
     addBase(
       normalizeBase(
@@ -253,12 +290,17 @@ function resolveApiBaseCandidates(): string[] {
       )
     );
 
+
     addCandidate(globalWithApiBase.__KOLIBRI_API_BASE__ ?? globalWithApiBase.__kolibriApiBase ?? "");
 
 
     const meta = document
       .querySelector('meta[name="kolibri-api-base"]')
       ?.getAttribute("content");
+
+    addCandidate(meta ?? "");
+
+
 
     addBase(normalizeBase(meta ?? ""));
 
@@ -309,6 +351,7 @@ function resolveApiPathCandidates(): string[] {
 
     addCandidate(meta ?? "");
 
+
     addCandidate(import.meta.env.BASE_URL ?? "");
     addCandidate(inferBaseFromLocation());
   }
@@ -354,6 +397,7 @@ function extractSources(content: string): SourceItem[] | undefined {
   return tail.split("\n").map(line => ({ source: line.replace(/^•\s*/, "").trim() }));
 }
 
+
 function selectToolPayload(data: Record<string, unknown>): unknown {
   if ("payload" in data) {
     return data.payload;
@@ -363,6 +407,15 @@ function selectToolPayload(data: Record<string, unknown>): unknown {
   }
   return data;
 
+
+function selectToolPayload(data: Record<string, unknown>): unknown {
+  if ("payload" in data) {
+    return data.payload;
+  }
+  if ("result" in data) {
+    return data.result;
+  }
+  return data;
 }
 
 export const useChatStore = create<ChatState>()(
@@ -395,14 +448,19 @@ export const useChatStore = create<ChatState>()(
           .then(apiBase => {
             const chatStream = new EventSource(
 
+              `${apiBase}/api/v1/chat/stream?session_id=${sessionId}`,
+
+
               `${apiBase}/chat/stream?session_id=${sessionId}`
+
             );
-            chatStream.onmessage = () => {};
             let currentAssistantId: string | null = null;
+
 
               `${apiBase}/api/v1/chat/stream?session_id=${sessionId}`,
             );
             let currentAssistantId: string | null = null;
+
 
             chatStream.onopen = () => {
               set({ connected: true });
@@ -426,6 +484,9 @@ export const useChatStore = create<ChatState>()(
                     role: "assistant",
                     content: "",
 
+                    pending: true,
+
+
                     pending: true
 
                     pending: true,
@@ -437,9 +498,13 @@ export const useChatStore = create<ChatState>()(
                   messages[idx] = {
                     ...messages[idx],
 
+                    content: `${messages[idx].content}${data.content}`,
+
+
                     content: `${messages[idx].content}${data.content}`
 
                     content: `${messages[idx].content}${data.content}`,
+
 
                   };
                 }
@@ -448,10 +513,12 @@ export const useChatStore = create<ChatState>()(
             });
 
             chatStream.addEventListener("tool_call", event => {
+
               const data = JSON.parse((event as MessageEvent).data);
 
 
             chatStream.addEventListener("tool_call", event => {
+
               const raw = JSON.parse((event as MessageEvent).data) as Record<string, unknown> & {
                 name?: string;
               };
@@ -463,6 +530,16 @@ export const useChatStore = create<ChatState>()(
                   {
                     id: randomId(),
                     role: "tool",
+
+                    content: typeof payload === "string" ? payload : JSON.stringify(payload, null, 2),
+                    toolName: typeof raw.name === "string" ? raw.name : undefined,
+                    toolPayload: payload,
+                  },
+                ],
+              }));
+            });
+
+
 
                     content: JSON.stringify(data, null, 2),
                     toolName: data.name
@@ -480,6 +557,7 @@ export const useChatStore = create<ChatState>()(
             });
 
 
+
             chatStream.addEventListener("final", event => {
               const data = JSON.parse((event as MessageEvent).data) as { content: string };
               set(state => {
@@ -492,9 +570,13 @@ export const useChatStore = create<ChatState>()(
                       content: data.content,
                       pending: false,
 
+                      sources: extractSources(data.content),
+
+
                       sources: extractSources(data.content)
 
                       sources: extractSources(data.content),
+
 
                     };
                   }
@@ -505,9 +587,13 @@ export const useChatStore = create<ChatState>()(
                     content: data.content,
                     pending: false,
 
+                    sources: extractSources(data.content),
+
+
                     sources: extractSources(data.content)
 
                     sources: extractSources(data.content),
+
 
                   });
                 }
@@ -528,12 +614,17 @@ export const useChatStore = create<ChatState>()(
                     id: data.id,
                     timestamp: data.timestamp,
 
+                    payload: data.payload,
+
+
                     payload: data.payload
+
                   },
-                  ...state.chain
-                ].slice(0, 50)
+                  ...state.chain,
+                ].slice(0, 50),
               }));
             });
+
 
             set({ connected: true, chatStream, chainStream });
 
@@ -543,6 +634,7 @@ export const useChatStore = create<ChatState>()(
                 ].slice(0, 50),
               }));
             });
+
 
             chainStream.onerror = event => {
               console.error("Kolibri chain stream error", event);
