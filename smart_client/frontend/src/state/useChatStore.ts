@@ -49,10 +49,58 @@ const randomId = () => {
   return Math.random().toString(36).slice(2);
 };
 
+
 const KNOWN_APP_ROUTES = new Set(["chat", "ledger", "settings"]);
 
 let resolvedApiBase: string | null = null;
 let resolvingApiBase: Promise<string> | null = null;
+
+const API_BASE = resolveApiBase();
+
+const KNOWN_APP_ROUTES = new Set(["chat", "ledger", "settings"]);
+
+function resolveApiBase(): string {
+  const fromEnv = normalizeBase(import.meta.env.VITE_API_BASE ?? "");
+
+
+function resolveApiBase(): string {
+  const fromEnv = trimTrailingSlash(import.meta.env.VITE_API_BASE ?? "");
+
+  if (fromEnv) {
+    return fromEnv;
+  }
+
+  if (typeof window === "undefined") {
+    return "";
+  }
+
+  const globalWithApiBase = window as Window & {
+    __KOLIBRI_API_BASE__?: string;
+    __kolibriApiBase?: string;
+  };
+
+  const globalBase = normalizeBase(
+
+  const globalBase = trimTrailingSlash(
+
+    globalWithApiBase.__KOLIBRI_API_BASE__ ?? globalWithApiBase.__kolibriApiBase ?? ""
+  );
+  if (globalBase) {
+    return globalBase;
+  }
+
+  const meta = document.querySelector('meta[name="kolibri-api-base"]')?.getAttribute("content") ?? "";
+
+  const metaBase = normalizeBase(meta);
+
+  const metaBase = trimTrailingSlash(meta);
+
+  if (metaBase) {
+    return metaBase;
+  }
+
+  return inferBaseFromLocation();
+}
 
 function normalizeBase(value: string): string {
   const trimmed = value.trim().replace(/\/+$/, "");
@@ -65,6 +113,7 @@ function normalizeBase(value: string): string {
   return trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
 }
 
+
 async function ensureApiBase(): Promise<string> {
   if (resolvedApiBase !== null) {
     return resolvedApiBase;
@@ -75,6 +124,7 @@ async function ensureApiBase(): Promise<string> {
   resolvedApiBase = await resolvingApiBase;
   return resolvedApiBase;
 }
+
 
 function inferBaseFromLocation(): string {
   if (typeof window === "undefined") {
@@ -101,6 +151,7 @@ function inferBaseFromLocation(): string {
   }
 
   return `/${segments.join("/")}`;
+
 }
 
 async function resolveApiBase(): Promise<string> {
@@ -153,6 +204,30 @@ function resolveApiBaseCandidates(): string[] {
   addCandidate("");
 
   return candidates;
+
+
+  const { pathname } = window.location;
+  const segments = pathname.split("/");
+  if (segments.length <= 1) {
+    return "";
+  }
+
+  if (segments[segments.length - 1] === "") {
+    segments.pop();
+  }
+
+  const baseSegments = segments.slice(0, -1);
+  const candidate = baseSegments.join("/") || "/";
+  if (candidate === "/" || candidate === "") {
+    return "";
+  }
+  return trimTrailingSlash(candidate);
+}
+
+function trimTrailingSlash(value: string): string {
+  return value.replace(/\/+$/, "");
+
+
 }
 
 export const useChatStore = create<ChatState>()(
