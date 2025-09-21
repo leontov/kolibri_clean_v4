@@ -1,6 +1,4 @@
 #include "vote_aggregate.h"
-#include <math.h>
-#include <string.h>
 
 static double clamp01(double v) {
     if (v < 0.0) {
@@ -17,58 +15,30 @@ void vote_apply_policy(VoteState* state, const VotePolicy* policy) {
         return;
     }
 
-    double decay = policy->depth_decay;
-    if (decay < 0.0) {
-        decay = 0.0;
-    } else if (decay > 1.0) {
-        decay = 1.0;
-    }
-    double quorum = policy->quorum;
-    if (quorum < 0.0) {
-        quorum = 0.0;
-    } else if (quorum > 1.0) {
-        quorum = 1.0;
-    }
+    double prior_mix = clamp01(policy->depth_decay);
+    double quorum = clamp01(policy->quorum);
+    double soft = clamp01(policy->temperature);
 
-    const double uniform = 1.0 / 10.0;
-    double adjusted[10];
     for (int i = 0; i < 10; ++i) {
         double v = clamp01(state->vote[i]);
-        v = decay * v + (1.0 - decay) * uniform;
+
+        if (prior_mix > 0.0) {
+            v = prior_mix * v + (1.0 - prior_mix) * 0.5;
+        }
+
         if (v < quorum) {
-            v = 0.0;
+            state->vote[i] = 0.0;
+            continue;
         }
-        adjusted[i] = v;
-    }
 
-    double temperature = state->temperature;
-    if (temperature <= 0.0) {
-        temperature = 1e-3;
-    }
-
-    double max_v = adjusted[0];
-    for (int i = 1; i < 10; ++i) {
-        if (adjusted[i] > max_v) {
-            max_v = adjusted[i];
+        if (soft > 0.0) {
+            double span = 1.0 - quorum;
+            double normalized = span > 0.0 ? (v - quorum) / span : 0.0;
+            normalized = normalized * (1.0 - soft) + 0.5 * soft;
+            v = quorum + normalized * span;
         }
-    }
 
-    double sum = 0.0;
-    for (int i = 0; i < 10; ++i) {
-        double scaled = (adjusted[i] - max_v) / temperature;
-        double e = exp(scaled);
-        adjusted[i] = e;
-        sum += e;
-    }
-
-    if (sum <= 0.0) {
-        for (int i = 0; i < 10; ++i) {
-            state->vote[i] = uniform;
-        }
-        return;
-    }
-
-    for (int i = 0; i < 10; ++i) {
-        state->vote[i] = adjusted[i] / sum;
+        state->vote[i] = clamp01(v);
     }
 }
+

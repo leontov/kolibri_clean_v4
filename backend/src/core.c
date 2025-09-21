@@ -22,16 +22,6 @@ static double eff_of(const Formula* f){
     mse/=n; return 1.0/(1.0+mse);
 }
 
-static DigitField g_field;
-static bool g_field_ready = false;
-
-static void cleanup_digit_field(void) {
-    if (g_field_ready) {
-        digit_field_free(&g_field);
-        g_field_ready = false;
-    }
-}
-
 static Formula* propose_formula(const VoteState* state, uint64_t seed){
     uint64_t s=seed;
     int choice=(int)floor(prng01(&s)*5.0);
@@ -55,22 +45,17 @@ bool kolibri_step(const kolibri_config_t* cfg, int step, const char* prev_hash,
     memset(out,0,sizeof(*out));
     out->step=step; out->parent=step-1; out->seed=cfg->seed^((uint64_t)step);
 
-    if(!g_field_ready){
-        if(!digit_field_init(&g_field, cfg->depth_max, cfg->seed)){
-            return false;
-        }
-        g_field_ready = true;
-        atexit(cleanup_digit_field);
-    }
-
-    digit_tick(&g_field, NULL);
+    AgentContext agent_ctx = {
+        .step = step,
+        .seed = cfg->seed,
+        .quorum = cfg->quorum,
+    };
 
     VoteState vote_state;
     memset(&vote_state, 0, sizeof(vote_state));
-    digit_aggregate(&g_field, &vote_state);
-    vote_state.temperature = cfg->temperature;
+    digit_votes(&agent_ctx, &vote_state);
 
-    VotePolicy policy = { cfg->depth_decay, cfg->quorum };
+    VotePolicy policy = { cfg->depth_decay, cfg->quorum, cfg->temperature };
     vote_apply_policy(&vote_state, &policy);
 
     for (int i = 0; i < 10; ++i) {
