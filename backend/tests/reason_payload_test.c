@@ -7,6 +7,7 @@ int main(void){
     b.step = 42;
     b.parent = 21;
     b.seed = 7;
+    strncpy(b.config_fingerprint, "deadbeef", sizeof(b.config_fingerprint)-1);
     b.eff = 0.25;
     b.compl = 0.75;
     strncpy(b.formula, "a+b", sizeof(b.formula)-1);

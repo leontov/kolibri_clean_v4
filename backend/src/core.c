@@ -357,6 +357,9 @@ bool kolibri_step(const kolibri_config_t* cfg, int step, const char* prev_hash,
     ensure_bench_data();
     memset(out,0,sizeof(*out));
     out->step=step; out->parent=(step>0)?(step-1):0; out->seed=cfg->seed^((uint64_t)step);
+    if(cfg->fingerprint[0]){
+        snprintf(out->config_fingerprint, sizeof(out->config_fingerprint), "%s", cfg->fingerprint);
+    }
     strncpy(out->fmt, "dsl-v1", sizeof(out->fmt)-1);
 
 

@@ -19,6 +19,7 @@ def main() -> None:
         "step",
         "parent",
         "seed",
+        "config_fingerprint",
         "formula",
         "eff",
         "compl",

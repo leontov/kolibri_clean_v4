@@ -11,8 +11,13 @@ typedef struct {
     double eff_threshold;
     double max_complexity;
     uint64_t seed;
+    char source_path[256];
+    bool loaded_from_file;
+    char canonical_json[256];
+    char fingerprint[65];
 } kolibri_config_t;
 
 bool kolibri_load_config(kolibri_config_t* cfg, const char* json_path);
+bool kolibri_config_write_snapshot(const kolibri_config_t* cfg, const char* path);
 
 #endif
