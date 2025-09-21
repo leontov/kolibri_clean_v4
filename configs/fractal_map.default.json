@@ -1,0 +1,18 @@
+{
+  "id": "default_v1",
+  "r": 0.5,
+  "coeff_sin_a": 0.9,
+  "coeff_sin_omega": 1.5707963267948966,
+  "coeff_linear": 0.65,
+  "coeff_quadratic": 0.5,
+  "coeff_tanh": 1.1,
+  "coeff_exp_amp": 0.4,
+  "coeff_exp_gamma": 0.45,
+  "coeff_log_eps": 0.001,
+  "coeff_mix_sin": 0.3,
+  "coeff_mix_cos": 0.22,
+  "coeff_mix_phi": 1.2566370614359172,
+  "coeff_pow_amp": 0.25,
+  "coeff_pow_exp": 2.4,
+  "coeff_reduce": 0.88
+}

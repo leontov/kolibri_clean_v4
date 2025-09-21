@@ -17,6 +17,7 @@ int rb_payload_json(const ReasonBlock* b, char* buf, size_t n){
     char fesc[512]; esc(b->formula, fesc, sizeof(fesc));
     char memesc[512]; esc(b->memory, memesc, sizeof(memesc));
     char fmtesc[64]; esc(b->fmt, fmtesc, sizeof(fmtesc));
+    char fmapesc[64]; esc(b->fa_map, fmapesc, sizeof(fmapesc));
     char prev_esc[128]; esc(b->prev, prev_esc, sizeof(prev_esc));
     char merkle_esc[128]; esc(b->merkle, merkle_esc, sizeof(merkle_esc));
     char cfgfp_esc[128]; esc(b->config_fingerprint, cfgfp_esc, sizeof(cfgfp_esc));
@@ -45,7 +46,9 @@ int rb_payload_json(const ReasonBlock* b, char* buf, size_t n){
     for(int i=0;i<10;i++){
         off += snprintf(buf+off, n-off, "%.17g%s", b->bench_eff[i], (i<9)?",":"]");
     }
-    off += snprintf(buf+off, n-off, ",\"memory\":\"%s\",\"merkle\":\"%s\"}", memesc, merkle_esc);
+    off += snprintf(buf+off, n-off, ",\"memory\":\"%s\",\"merkle\":\"%s\"", memesc, merkle_esc);
+    off += snprintf(buf+off, n-off, ",\"fa\":\"%s\",\"fa_stab\":%d,\"fa_map\":\"%s\",\"r\":%.17g}",
+                    b->fa, b->fa_stab, fmapesc, b->fractal_r);
 
     if(off<0 || (size_t)off>=n) return -1;
     return off;
