@@ -1,16 +1,14 @@
 #include "digit_agents.h"
+
 #include <math.h>
+#include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 
-static double clamp01(double v) {
-    if (v < 0.0) {
-        return 0.0;
-    }
-    if (v > 1.0) {
-        return 1.0;
-    }
-    return v;
-}
+#define DIGIT_BRANCHING 10
+#define DIGIT_TICK_MIX 0.65
+#define DIGIT_CHILD_BLEND 0.35
+#define DIGIT_AGGREGATE_DECAY 0.6
 
 static uint64_t splitmix64(uint64_t x) {
     x += UINT64_C(0x9E3779B97F4A7C15);
@@ -23,54 +21,154 @@ static double unit_from_u64(uint64_t x) {
     return (double)(x >> 11) * (1.0 / 9007199254740992.0);
 }
 
-static double base_pattern(int agent_id, int step) {
-    const double harmonics[10] = {
-        0.73, 1.17, 0.93, 1.41, 0.66,
-        1.07, 0.81, 1.23, 0.58, 1.37
-    };
-    const double offsets[10] = {
-        0.0, 0.35, 0.62, 0.18, 0.47,
-        0.73, 0.28, 0.92, 0.11, 0.56
-    };
-    double freq = harmonics[agent_id];
-    double shift = offsets[agent_id];
-    double phase = (double)step * freq + shift;
-    double wave = sin(phase);
-    return 0.5 + 0.5 * wave;
+static void digit_agent_free(DigitAgent* agent) {
+    if (!agent) {
+        return;
+    }
+    for (size_t i = 0; i < DIGIT_BRANCHING; ++i) {
+        digit_agent_free(agent->sub[i]);
+        agent->sub[i] = NULL;
+    }
+    free(agent);
 }
 
-double agent_vote(const AgentContext* ctx, int agent_id) {
-    if (!ctx || agent_id < 0 || agent_id >= 10) {
-        return 0.0;
+static DigitAgent* digit_agent_clone(int depth, int depth_max, uint64_t seed) {
+    DigitAgent* agent = calloc(1, sizeof(DigitAgent));
+    if (!agent) {
+        return NULL;
     }
 
-    uint64_t seed = ctx->seed;
-    seed ^= (uint64_t)(ctx->step + 1) * UINT64_C(0xA0761D6478BD642F);
-    seed ^= (uint64_t)(agent_id + 1) * UINT64_C(0xE7037ED1A0B428DB);
-    uint64_t noise_src = splitmix64(seed);
-    double noise = unit_from_u64(noise_src);
+    agent->seed = seed;
+    agent->weight = unit_from_u64(splitmix64(seed));
 
-    double pattern = base_pattern(agent_id, ctx->step);
-    double influence = 0.65 * pattern + 0.35 * noise;
-
-    if (ctx->quorum > 0.0) {
-        double guard = clamp01(ctx->quorum * 0.5);
-        influence = guard + (1.0 - guard) * influence;
+    if (depth + 1 >= depth_max) {
+        return agent;
     }
 
-    return clamp01(influence);
+    for (size_t i = 0; i < DIGIT_BRANCHING; ++i) {
+        uint64_t child_seed = splitmix64(seed ^ (UINT64_C(0xA0761D6478BD642F) * (i + 1)));
+        agent->sub[i] = digit_agent_clone(depth + 1, depth_max, child_seed);
+        if (!agent->sub[i]) {
+            digit_agent_free(agent);
+            return NULL;
+        }
+    }
+
+    return agent;
 }
 
-void digit_votes(const AgentContext* ctx, VoteState* out) {
+bool digit_field_init(DigitField* field, int depth_max, uint64_t seed) {
+    if (!field || depth_max <= 0) {
+        return false;
+    }
+
+    memset(field, 0, sizeof(*field));
+    field->depth_max = depth_max;
+
+    for (size_t i = 0; i < DIGIT_BRANCHING; ++i) {
+        uint64_t branch_seed = splitmix64(seed + (uint64_t)(i + 1));
+        field->root[i] = digit_agent_clone(0, depth_max, branch_seed);
+        if (!field->root[i]) {
+            digit_field_free(field);
+            return false;
+        }
+    }
+
+    return true;
+}
+
+void digit_field_free(DigitField* field) {
+    if (!field) {
+        return;
+    }
+    for (size_t i = 0; i < DIGIT_BRANCHING; ++i) {
+        digit_agent_free(field->root[i]);
+        field->root[i] = NULL;
+    }
+    field->depth_max = 0;
+}
+
+static void digit_agent_tick(DigitAgent* agent) {
+    if (!agent) {
+        return;
+    }
+
+    agent->seed = splitmix64(agent->seed);
+    double sample = unit_from_u64(agent->seed);
+
+    double child_sum = 0.0;
+    int child_count = 0;
+    for (size_t i = 0; i < DIGIT_BRANCHING; ++i) {
+        if (!agent->sub[i]) {
+            continue;
+        }
+        digit_agent_tick(agent->sub[i]);
+        child_sum += agent->sub[i]->weight;
+        child_count++;
+    }
+
+    double child_avg = child_count > 0 ? (child_sum / (double)child_count) : sample;
+    double updated = DIGIT_TICK_MIX * sample + DIGIT_CHILD_BLEND * child_avg;
+    double current = 1.0 - DIGIT_TICK_MIX - DIGIT_CHILD_BLEND;
+    if (current < 0.0) {
+        current = 0.0;
+    }
+    agent->weight = current * agent->weight + updated;
+
+    if (agent->weight < 0.0) {
+        agent->weight = 0.0;
+    } else if (agent->weight > 1.0) {
+        agent->weight = 1.0;
+    }
+}
+
+void digit_tick(DigitField* field) {
+    if (!field) {
+        return;
+    }
+    for (size_t i = 0; i < DIGIT_BRANCHING; ++i) {
+        digit_agent_tick(field->root[i]);
+    }
+}
+
+static void accumulate_vote(const DigitAgent* agent, double weight, double* sum, double* norm) {
+    if (!agent) {
+        return;
+    }
+    *sum += weight * agent->weight;
+    *norm += weight;
+    double child_weight = weight * DIGIT_AGGREGATE_DECAY;
+    for (size_t i = 0; i < DIGIT_BRANCHING; ++i) {
+        if (agent->sub[i]) {
+            accumulate_vote(agent->sub[i], child_weight, sum, norm);
+        }
+    }
+}
+
+void digit_aggregate(const DigitField* field, VoteState* out) {
     if (!out) {
         return;
     }
-    memset(out->vote, 0, sizeof(out->vote));
-    if (!ctx) {
+    memset(out, 0, sizeof(*out));
+    if (!field) {
         return;
     }
-    for (int i = 0; i < 10; ++i) {
-        out->vote[i] = agent_vote(ctx, i);
+
+    for (size_t i = 0; i < DIGIT_BRANCHING; ++i) {
+        double sum = 0.0;
+        double norm = 0.0;
+        accumulate_vote(field->root[i], 1.0, &sum, &norm);
+        if (norm > 0.0) {
+            double value = sum / norm;
+            if (value < 0.0) {
+                value = 0.0;
+            } else if (value > 1.0) {
+                value = 1.0;
+            }
+            out->vote[i] = value;
+        } else {
+            out->vote[i] = 0.0;
+        }
     }
 }
 

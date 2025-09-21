@@ -2,18 +2,27 @@
 #define KOLIBRI_DIGIT_AGENTS_H
 
 #include "common.h"
+#include <stdbool.h>
+
+typedef struct DigitAgent {
+    double weight;
+    uint64_t seed;
+    struct DigitAgent* sub[10];
+} DigitAgent;
 
 typedef struct {
-    int step;               // current step index (>= 1)
-    uint64_t seed;          // deterministic seed shared across agents
-    double quorum;          // quorum threshold supplied by the core
-} AgentContext;
+    DigitAgent* root[10];
+    int depth_max;
+} DigitField;
 
 typedef struct {
     double vote[10];
+    double temperature;
 } VoteState;
 
-double agent_vote(const AgentContext* ctx, int agent_id);
-void digit_votes(const AgentContext* ctx, VoteState* out);
+bool digit_field_init(DigitField* field, int depth_max, uint64_t seed);
+void digit_field_free(DigitField* field);
+void digit_tick(DigitField* field);
+void digit_aggregate(const DigitField* field, VoteState* out);
 
 #endif

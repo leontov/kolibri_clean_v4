@@ -3,6 +3,7 @@
 #include "chainio.h"
 #include "digit_agents.h"
 #include "vote_aggregate.h"
+#include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
@@ -20,6 +21,28 @@ static double eff_of(const Formula* f){
         double e=f_eval(f,x)-target(x); mse+=e*e; n++;
     }
     mse/=n; return 1.0/(1.0+mse);
+}
+
+static DigitField g_digit_field;
+static bool g_digit_field_ready = false;
+
+static void digit_field_shutdown(void) {
+    if (g_digit_field_ready) {
+        digit_field_free(&g_digit_field);
+        g_digit_field_ready = false;
+    }
+}
+
+static bool ensure_digit_field(const kolibri_config_t* cfg) {
+    if (g_digit_field_ready) {
+        return true;
+    }
+    if (!digit_field_init(&g_digit_field, cfg->depth_max > 0 ? cfg->depth_max : 1, cfg->seed)) {
+        return false;
+    }
+    atexit(digit_field_shutdown);
+    g_digit_field_ready = true;
+    return true;
 }
 
 static Formula* propose_formula(const VoteState* state, uint64_t seed){
@@ -45,17 +68,18 @@ bool kolibri_step(const kolibri_config_t* cfg, int step, const char* prev_hash,
     memset(out,0,sizeof(*out));
     out->step=step; out->parent=step-1; out->seed=cfg->seed^((uint64_t)step);
 
-    AgentContext agent_ctx = {
-        .step = step,
-        .seed = cfg->seed,
-        .quorum = cfg->quorum,
-    };
+    if (!ensure_digit_field(cfg)) {
+        return false;
+    }
+
+    digit_tick(&g_digit_field);
 
     VoteState vote_state;
     memset(&vote_state, 0, sizeof(vote_state));
-    digit_votes(&agent_ctx, &vote_state);
+    digit_aggregate(&g_digit_field, &vote_state);
+    vote_state.temperature = cfg->temperature;
 
-    VotePolicy policy = { cfg->depth_decay, cfg->quorum, cfg->temperature };
+    VotePolicy policy = { cfg->depth_decay, cfg->quorum };
     vote_apply_policy(&vote_state, &policy);
 
     for (int i = 0; i < 10; ++i) {
