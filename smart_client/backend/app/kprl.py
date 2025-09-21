@@ -6,7 +6,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, AsyncGenerator, Dict, List, Tuple
+from typing import Any, Dict, List
 
 from .config import settings
 
