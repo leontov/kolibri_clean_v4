@@ -16,13 +16,12 @@ static void sha256_hex(const unsigned char* d, size_t n, char out[65]){
     SHA256(d,n,buf); hex(buf, SHA256_DIGEST_LENGTH, out);
 }
 
-bool chain_append(const char* path, const ReasonBlock* b){
+bool chain_append(const char* path, const ReasonBlock* b, const kolibri_config_t* cfg){
     FILE* f = fopen(path, "ab"); if(!f) return false;
     char payload[4096]; int m = rb_payload_json(b, payload, sizeof(payload));
     if(m<0){ fclose(f); return false; }
 
-    const char* k = getenv("KOLIBRI_HMAC_KEY");
-    if(!k){ k = "insecure-key"; }
+    const char* k = kolibri_config_hmac_key(cfg);
     // hash/hmac over EXACT payload bytes
     char hash[65], hmac_hex[65];
     sha256_hex((unsigned char*)payload, (size_t)m, hash);
@@ -136,15 +135,14 @@ bool chain_load(const char* path, ReasonBlock** out_arr, size_t* out_n){
     *out_arr=arr; *out_n=n; return true;
 }
 
-bool chain_verify(const char* path, FILE* out){
+bool chain_verify(const char* path, FILE* out, const kolibri_config_t* cfg){
     ReasonBlock* arr=NULL; size_t n=0;
     if(!chain_load(path,&arr,&n) || n==0){
         if(out) fprintf(out,"No chain at %s\n", path);
         free(arr);
         return false;
     }
-    const char* k = getenv("KOLIBRI_HMAC_KEY");
-    if(!k) k = "insecure-key";
+    const char* k = kolibri_config_hmac_key(cfg);
 
     char prev[65]={0};
     for(size_t i=0;i<n;i++){

@@ -444,8 +444,7 @@ bool kolibri_step(const kolibri_config_t* cfg, int step, const char* prev_hash,
 
     char hash_hex[65];
     sha256_hex_local((unsigned char*)payload, (size_t)len, hash_hex);
-    const char* key = getenv("KOLIBRI_HMAC_KEY");
-    if(!key) key = "insecure-key";
+    const char* key = kolibri_config_hmac_key(cfg);
     unsigned char* mac = HMAC(EVP_sha256(), key, (int)strlen(key),
                               (unsigned char*)payload, (size_t)len, NULL, NULL);
     char hmac_hex[65];
@@ -454,7 +453,7 @@ bool kolibri_step(const kolibri_config_t* cfg, int step, const char* prev_hash,
     snprintf(out->hmac, sizeof(out->hmac), "%s", hmac_hex);
     if(out_hash) snprintf(out_hash, 65, "%s", hash_hex);
 
-    if(!chain_append("logs/chain.jsonl", out)){ f_free(f); return false; }
+    if(!chain_append("logs/chain.jsonl", out, cfg)){ f_free(f); return false; }
 
     snprintf(g_last_merkle, sizeof(g_last_merkle), "%s", out->merkle);
 

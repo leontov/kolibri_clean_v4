@@ -22,7 +22,7 @@ SRC := backend/src
 BIN_DIR := bin
 BINS := $(BIN_DIR)/kolibri_run $(BIN_DIR)/kolibri_verify $(BIN_DIR)/kolibri_replay
 
-TEST_BINS := $(BIN_DIR)/reason_payload_test $(BIN_DIR)/bench_validation_test $(BIN_DIR)/fractal_test
+TEST_BINS := $(BIN_DIR)/reason_payload_test $(BIN_DIR)/bench_validation_test $(BIN_DIR)/fractal_test $(BIN_DIR)/test_verify_break
 
 COMMON_OBJS := $(SRC)/digit_agents.c $(SRC)/vote_aggregate.c
 
@@ -61,11 +61,15 @@ $(BIN_DIR)/bench_validation_test: backend/tests/bench_validation_test.c $(SRC)/r
 $(BIN_DIR)/fractal_test: backend/tests/fractal_test.c $(SRC)/fractal.c $(SRC)/dsl.c $(SRC)/reason.c
 	$(CC) $(CFLAGS) $(INCLUDE) $^ -o $@ $(LDFLAGS)
 
+$(BIN_DIR)/test_verify_break: backend/tests/test_verify_break.c $(SRC)/chainio.c $(SRC)/reason.c $(SRC)/config.c
+	$(CC) $(CFLAGS) $(INCLUDE) $^ -o $@ $(LDFLAGS)
+
 .PHONY: tests
 tests: $(BIN_DIR) $(TEST_BINS)
 	python3 tests/test_reason_payload.py
 	$(BIN_DIR)/bench_validation_test
 	$(BIN_DIR)/fractal_test
+	$(BIN_DIR)/test_verify_break
 
 .PHONY: test
 test: $(BIN_DIR)/test_vote
