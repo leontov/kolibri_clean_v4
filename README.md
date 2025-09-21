@@ -1,97 +1,108 @@
-# Kolibri Clean v4
+# Kolibri One-Pass Build
 
-> Автор и владелец разработки: **Кочуров Владислав Евгеньевич**
+Kolibri is a deterministic research platform that ships a cryptographically verifiable ledger (KPRL), FA-10 fractal positioning and a SPA/PWA dashboard. This repository contains both the C backend (single `kolibri` binary) and the React + Vite frontend.
 
-Kolibri Clean v4 — это эталонная реализация журнала действий с детерминированной
-подписью и набором модулей Kolibri-x для экспериментов с мультимодальным
-планировщиком, приватностью и офлайн-режимом. Репозиторий служит точкой
-сборки для команды разработки: здесь описаны архитектура, процессы
-разработки и правила сопровождения.
+## Features
 
-## Что входит в платформу
+- **FA-10 positioning** – votes are transformed into a 10-digit fractal address and stability index.
+- **KPRL ledger** – payloads are serialized with a canonical JSON printer, hashed with SHA256 and optionally HMAC-SHA256.
+- **CLI** – `kolibri` supports `run`, `verify`, `replay` and `serve` commands for generation, validation and HTTP serving.
+- **SPA/PWA dashboard** – Vite + React 18 + Zustand + TailwindCSS + shadcn/ui patterns and Recharts visualizations.
+- **PWA** – offline-first service worker, install prompt, cache-first for static assets and stale-while-revalidate for `/api/v1/status`.
+- **SSE streaming** – `/api/v1/chain/stream` pushes `block`, `verify` and `metric` events to the dashboard.
 
-- **Детерминированные журналы**: C-бэкенд формирует цепочку JSONL-записей и
-  проверяет их целостность через `hash` и `hmac`, вычисляемые над теми же
-  байтами, что попадают в лог.
-- **Мультимодальное ядро Kolibri-x**: набор легковесных энкодеров,
-  планировщик, граф знаний и рантайм-оркестратор, моделирующие целевую
-  архитектуру Kolibri.
-- **Приватность и персонализация**: локальный оператор согласий,
-  офлайн-кэш, эмпатический модуль и песочницы навыков.
-- **Наблюдаемость и XAI**: журнал рассуждений, аудиторские следы и
-  инструменты повторного прогоня.
-- **Дорожная карта развития**: согласованный план поставки возможностей
-  Kolibri-x и чек-листы качества.
+## Backend layout
 
-## С чего начать новой команде
-
-1. Прочитайте [портал документации](docs/index.md) — он связывает все
-   материалы и даёт обзор потоков.
-2. Настройте окружение по инструкции из
-   [developer-handbook](docs/developer_handbook.md).
-3. Соберите и запустите журнал с помощью `make bin/kolibri_run` или
-   `./build_macos.sh bin/kolibri_run` (Makefile требует полный путь к цели),
-   затем воспроизведите базовый сценарий, следуя
-   [runtime-operations](docs/runtime_and_operations.md).
-4. Перед изменениями сверяйтесь с [roadmap](docs/roadmap.md) и
-   [architecture](docs/architecture.md), чтобы понимать контекст.
-
-## Быстрый старт
-
-### macOS
-```bash
-./build_macos.sh bin/kolibri_run
-# без ключа
-unset KOLIBRI_HMAC_KEY
-./bin/kolibri_run configs/kolibri.json
-./bin/kolibri_verify logs/chain.jsonl
-# с ключом
-# export KOLIBRI_HMAC_KEY="secret"
-# ./bin/kolibri_run configs/kolibri.json && ./bin/kolibri_verify logs/chain.jsonl
+```
+backend/
+  include/...
+  src/...
+configs/
+datasets/
+logs/
 ```
 
-### Ubuntu / Debian
+### CLI commands
+
+- `kolibri run --config configs/kolibri.json --steps 30 --beam 1 --lambda 0.01 --fmt 5` – generate a 30 block chain.
+- `kolibri verify logs/chain.jsonl` – recompute hashes/HMAC and validate parent links.
+- `kolibri replay --config configs/kolibri.json` – print a textual summary of the recorded chain.
+- `kolibri serve --port 8080 --static web/dist [--cors-dev]` – launch the HTTP API, SPA static file server and SSE stream.
+
+### Payload schema (canonical order)
+
+`step,parent,seed,formula,eff,compl,prev,votes,fmt,fa,fa_stab,fa_map,r,run_id,cfg_hash,eff_train,eff_val,eff_test,explain,hmac_alg,salt`
+
+Fields are append-only – new attributes must be added to the end of the payload to preserve deterministic verification.
+
+### API surface
+
+- `GET /api/v1/status` → `{version, run_id, time_utc, fmt}`
+- `GET /api/v1/chain?tail=N` → `[{payload:{...},hash:"...",hmac:"..."}]`
+- `GET /api/v1/chain/stream` → SSE (`block`, `verify`, `metric` events)
+- `POST /api/v1/run` → `{started:true, steps}`
+- `POST /api/v1/verify` → `{ok:true, path}`
+- `GET /api/v1/skills` → demo payload
+
+### Building the backend
+
+The build depends on OpenSSL 3, `pkg-config`, `pthread` and a C11 compiler.
+
 ```bash
-sudo apt-get update && sudo apt-get install -y build-essential libssl-dev pkg-config
-make -j"$(nproc)" bin/kolibri_run
+make            # builds kolibri
+make test       # runs the C test suite
 ```
 
-Команда `make tests` собирает вспомогательные бинарники и прогоняет
-регрессионные проверки. Для одиночного теста голосования можно вызвать
-`make test`.
+#### OpenSSL setup
 
-## Структура репозитория
+- **Ubuntu**: `sudo apt install build-essential pkg-config libssl-dev`
+- **macOS (Homebrew)**: `brew install openssl@3 pkg-config`
 
-| Каталог | Содержимое |
-| --- | --- |
-| `backend/` | C-бэкенд журнала: DSL формул, поиск, верификация, CLI. |
-| `bin/` | Скомпилированные утилиты `kolibri_run`, `kolibri_verify`, `kolibri_replay` и тесты. |
-| `configs/` | Конфигурации запуска, например `kolibri.json`. |
-| `docs/` | Полный комплект документации (архитектура, процессы, roadmap). |
-| `kolibri_x/` | Модульная Python-реализация компонентов Kolibri-x. |
-| `tests/` | Python и C-тесты для DSL, агрегации и бэкенда. |
-| `logs/` | Журналы выполнения (`chain.jsonl`), создаются во время запуска. |
+### Frontend
 
-Дополнительные сведения по каждому модулю собраны в
-[module reference](docs/module_reference.md).
+The SPA/PWA lives in `web/`. It uses Vite + React + TypeScript and includes TailwindCSS utilities and Recharts charts.
 
-## Процессы разработки
+```bash
+cd web
+npm install
+npm run build   # output in web/dist
+npm run dev     # start Vite dev server
+```
 
-- Всегда запускайте `make tests` перед коммитом. Это быстрый набор
-  проверок, который гарантирует целостность DSL и бенчмарков.
-- Изменяя бэкенд, обновляйте схемы конфигураций в
-  [runtime_and_operations.md](docs/runtime_and_operations.md).
-- При добавлении новых возможностей синхронизируйтесь с дорожной картой и
-  вносите изменения в [roadmap](docs/roadmap.md).
-- Ведение журнала разработки, правила код-ревью и чек-листы описаны в
-  [developer handbook](docs/developer_handbook.md).
+> **Note:** PWA icon PNGs are generated locally via `npm run generate:icons` (automatically executed by `predev`/`prebuild`) so the repository stays binary-free.
 
-## Документация и поддержка
+The service worker performs cache-first for static bundles, stale-while-revalidate for `/api/v1/status` and returns `offline.html` for navigation errors. Install prompts are surfaced through `beforeinstallprompt`.
 
-- [docs/index.md](docs/index.md) — карта знаний проекта.
-- Вопросы и предложения фиксируйте в issue-трекере. В каждом обсуждении
-  указывайте релевантные разделы документации.
-- За актуальность документов отвечает автор проекта — Кочуров Владислав
-  Евгеньевич. Обновляйте материалы одновременно с кодом, чтобы команда
-  всегда знала, как воспроизвести функциональность и продолжить работу.
+### HTTP server
 
+`kolibri serve` exposes:
+
+- Static SPA with history fallback
+- REST API described above
+- SSE stream (`/api/v1/chain/stream`)
+- Optional `--cors-dev` flag for permissive local testing
+
+### Dataset & configs
+
+- `datasets/demo.csv` – simple regression demo set
+- `configs/kolibri.json` – runtime defaults (run ID, lambda, fmt, seeds)
+- `configs/fractal_map.default.json` – FA-10 transform coefficients
+
+### Tests
+
+`make test` compiles and executes:
+
+- `tests/test_payload.c` – ensures canonical log format
+- `tests/test_fa.c` – validates FA-10 encoding/stability
+- `tests/test_verify_break.c` – verifies byte flips break the chain
+
+## Security & determinism notes
+
+- Locale is forced to `C` for serialization.
+- Numbers are printed with `%.17g`.
+- `kolibri_verify_file` recomputes SHA256 and optional HMAC-SHA256 (key provided via config).
+- Payload evolution must append fields at the tail of the canonical order.
+
+## Licensing
+
+Kolibri is provided for internal prototyping and evaluation.

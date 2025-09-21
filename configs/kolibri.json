@@ -1,10 +1,1 @@
-{
-  "steps": 30,
-  "depth_max": 2,
-  "depth_decay": 0.7,
-  "quorum": 0.6,
-  "temperature": 0.15,
-  "eff_threshold": 0.8,
-  "max_complexity": 32.0,
-  "seed": 987654321
-}
+{"run_id":"kolibri-demo","fractal_map":"configs/fractal_map.default.json","dataset":"datasets/demo.csv","fmt":5,"lambda":0.01,"seed":42,"salt":"kolibri","hmac_key":""}

@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light dark;
+}
+
+body {
+  @apply bg-slate-950 text-slate-100 min-h-screen;
+}
+
+a {
+  @apply text-brand-500 hover:text-brand-700 transition-colors;
+}
+
+.card {
+  @apply bg-slate-900/70 border border-slate-800 rounded-xl p-4 shadow-lg shadow-slate-900/40;
+}
+
+.badge {
+  @apply inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-medium bg-brand-500/20 text-brand-50;
+}
