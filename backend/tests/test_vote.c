@@ -21,19 +21,25 @@ int main(void){
     VotePolicy policy = {1.0, 0.0, 0.0};
     double out[10];
 
-    digit_aggregate(out, &policy, (const double (*)[10])layers, 3);
+    digit_layers_aggregate(out, &policy, (const double (*)[10])layers, 3);
     assert_close(out[0], 2.0/3.0);
     assert_close(out[1], 2.0/3.0);
 
     policy.depth_decay = 0.0;
-    digit_aggregate(out, &policy, (const double (*)[10])layers, 3);
+    digit_layers_aggregate(out, &policy, (const double (*)[10])layers, 3);
     assert_close(out[0], 1.0);
     assert_close(out[1], 0.0);
 
     policy.depth_decay = 0.5;
-    digit_aggregate(out, &policy, (const double (*)[10])layers, 3);
+    digit_layers_aggregate(out, &policy, (const double (*)[10])layers, 3);
     assert_close(out[0], 1.25/1.75);
     assert_close(out[1], 0.75/1.75);
+
+    policy.quorum = 0.6;
+    policy.temperature = 0.5;
+    vote_apply_policy_values(out, &policy);
+    assert_close(out[0], 0.7571428571428571);
+    assert_close(out[1], 0.0);
 
     return 0;
 }

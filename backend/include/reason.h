@@ -30,4 +30,11 @@ typedef struct {
    Returns length (>=0) or -1 on overflow. */
 int rb_payload_json(const ReasonBlock* b, char* buf, size_t n);
 
+/* Calculate a normalized benchmark validation score.
+   Only finite benchmark values greater than or equal to min_eff contribute
+   to the score. The result is the arithmetic mean of the accepted values.
+   Non-finite values and values below the threshold are ignored. If no values
+   qualify, the function returns 0. */
+double rb_bench_validation_score(const ReasonBlock* b, double min_eff);
+
 #endif

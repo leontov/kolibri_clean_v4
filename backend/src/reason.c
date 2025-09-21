@@ -1,6 +1,7 @@
 #include "reason.h"
 #include <string.h>
 #include <stdio.h>
+#include <math.h>
 
 static void esc(const char* s, char* out, size_t n){
     size_t j=0; if(n) out[0]=0;
@@ -46,4 +47,35 @@ int rb_payload_json(const ReasonBlock* b, char* buf, size_t n){
 
     if(off<0 || (size_t)off>=n) return -1;
     return off;
+}
+
+double rb_bench_validation_score(const ReasonBlock* b, double min_eff){
+    if(!b){
+        return 0.0;
+    }
+
+    if(!isfinite(min_eff)){
+        min_eff = 0.0;
+    }
+
+    double total = 0.0;
+    size_t counted = 0;
+
+    for(size_t i = 0; i < sizeof(b->bench_eff) / sizeof(b->bench_eff[0]); ++i){
+        double value = b->bench_eff[i];
+        if(!isfinite(value)){
+            continue;
+        }
+        if(value < min_eff){
+            continue;
+        }
+        total += value;
+        counted++;
+    }
+
+    if(counted == 0){
+        return 0.0;
+    }
+
+    return total / (double)counted;
 }
