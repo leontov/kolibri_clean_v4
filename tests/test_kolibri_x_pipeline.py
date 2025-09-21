@@ -7,23 +7,36 @@ import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
 
-from kolibri_x.core.encoders import TextEncoder
-from kolibri_x.core.planner import NeuroSemanticPlanner
-from kolibri_x.kg.graph import Edge, KnowledgeGraph, Node
+from kolibri_x.core.encoders import (
+    AdaptiveAudioEncoder,
+    AdaptiveCrossModalTransformer,
+    ContinualLearner,
+    DiffusionVisionEncoder,
+    ModalitySignal,
+    SensorEvent,
+    SensorHub,
+    TemporalAlignmentEngine,
+    TextEncoder,
+)
+from kolibri_x.core.planner import HierarchicalPlan, NeuroSemanticPlanner
+from kolibri_x.kg.graph import Edge, KnowledgeGraph, Node, VerificationResult
 from kolibri_x.kg.ingest import KnowledgeDocument, KnowledgeIngestor
 from kolibri_x.kg.rag import RAGPipeline
 from kolibri_x.eval.active_learning import ActiveLearner, CandidateExample
 from kolibri_x.eval.missions import Mission, MissionPack
 from kolibri_x.eval.mksi import compute_metrics
 from kolibri_x.personalization import (
+    Achievement,
+    AdaptivePromptSelector,
     EmpathyContext,
     EmpathyModulator,
     InteractionSignal,
     ModelUpdate,
+    MotivationEngine,
     OnDeviceProfiler,
     SecureAggregator,
 )
-from kolibri_x.privacy.consent import PrivacyOperator
+from kolibri_x.privacy.consent import AccessProof, PolicyLayer, PrivacyOperator
 from kolibri_x.runtime.cache import OfflineCache
 from kolibri_x.runtime.iot import IoTBridge, IoTCommand, IoTPolicy
 from kolibri_x.runtime.journal import ActionJournal
@@ -119,11 +132,24 @@ def test_rag_pipeline_returns_supported_answer(knowledge_graph: KnowledgeGraph) 
 
 def test_privacy_operator_controls_access() -> None:
     operator = PrivacyOperator()
+    operator.register_layer(PolicyLayer(name="baseline", scope={"text"}, default_action="allow"))
     operator.grant("user-1", ["audio", "text"])
     operator.deny("user-1", ["audio"])
     assert operator.is_allowed("user-1", "text")
     assert not operator.is_allowed("user-1", "audio")
-    assert operator.enforce("user-1", ["audio", "text", "image"]) == ["text"]
+    allowed = operator.enforce("user-1", ["audio", "text", "image"])
+    assert allowed == ["text"]
+
+
+def test_privacy_operator_layers_and_proofs() -> None:
+    operator = PrivacyOperator()
+    operator.register_layer(PolicyLayer(name="iot", scope={"sensor"}, default_action="deny"))
+    operator.grant("user", ["sensor"])
+    proofs = operator.record_access("workflow", "user", ["sensor"])
+    assert len(proofs) == 1
+    assert isinstance(proofs[0], AccessProof)
+    allowed = operator.enforce("user", ["unknown"])
+    assert allowed == []
 
 
 def test_skill_store_permission_checks(skill_store: SkillStore) -> None:
@@ -139,6 +165,9 @@ def test_planner_aligns_steps_with_skills(skill_store: SkillStore) -> None:
     planner = NeuroSemanticPlanner({manifest.name: manifest for manifest in skill_store.list()})
     plan = planner.plan("Draft and refine the product pitch deck.")
     assert plan.steps[0].skill == "writer"
+    hierarchical = planner.hierarchical_plan("Draft and refine the product pitch deck.")
+    assert isinstance(hierarchical, HierarchicalPlan)
+    assert hierarchical.assignments
 
 
 def test_offline_cache_eviction() -> None:
@@ -155,6 +184,64 @@ def test_offline_cache_eviction() -> None:
     assert cache.size() == 0
 
 
+def test_adaptive_cross_modal_transformer_decides_depth() -> None:
+    transformer = AdaptiveCrossModalTransformer(dim=8)
+    signals = [
+        ModalitySignal(name="text", embedding=[0.5] * 8, quality=0.9, latency_ms=10),
+        ModalitySignal(name="image", embedding=[0.1] * 8, quality=0.4, latency_ms=100),
+    ]
+    result = transformer.fuse(signals, budget=1.5)
+    assert set(result.modality_weights) == {"text", "image"}
+    assert result.metadata["layers"]["text"] >= result.metadata["layers"]["image"]
+
+
+def test_diffusion_encoder_and_audio_calibration() -> None:
+    encoder = DiffusionVisionEncoder(dim=16, frame_window=2)
+    frames = [bytes([index] * 3) for index in range(4)]
+    embedding = encoder.encode_video(frames)
+    assert len(embedding) == 16
+    audio = AdaptiveAudioEncoder(dim=8)
+    audio.calibrate("user", [0.1, 0.2, 0.1, 0.2])
+    vector = audio.encode([0.3, 0.4, 0.2, 0.1], user_id="user")
+    assert len(vector) == 8
+
+
+def test_sensor_hub_and_alignment() -> None:
+    hub = SensorHub()
+    hub.ingest(SensorEvent(source="cam", signal_type="gesture", value=0.5, timestamp=10.0))
+    hub.ingest(SensorEvent(source="mic", signal_type="speech", value=0.2, timestamp=11.0))
+    sequences = hub.to_sequences()
+    engine = TemporalAlignmentEngine()
+    aligned = engine.align(sequences)
+    assert set(aligned)
+
+
+def test_continual_learner_snapshot() -> None:
+    learner = ContinualLearner(consolidation=0.5)
+    update1 = learner.train("task-a", {"w1": 0.3, "w2": -0.2})
+    update2 = learner.train("task-b", {"w1": 0.1, "w3": 0.4})
+    snapshot = learner.snapshot()
+    assert snapshot["tasks"] == ["task-a", "task-b"]
+    assert update1["w1"] != update2["w1"]
+
+
+def test_knowledge_graph_verification_and_compression() -> None:
+    graph = KnowledgeGraph()
+    node_a = Node(id="a", type="Claim", text="A", sources=["s1"], confidence=0.7, embedding=[1.0, 0.0])
+    node_b = Node(id="b", type="Claim", text="B", sources=["s2"], confidence=0.65, embedding=[1.0, 0.0])
+    graph.add_node(node_a)
+    graph.add_node(node_b)
+    graph.add_edge(Edge(source="a", target="b", relation="contradicts"))
+    duplicates = graph.deduplicate_embeddings()
+    assert duplicates
+    results = graph.verify_with_critics({"critic": lambda node: node.confidence})
+    assert all(isinstance(result, VerificationResult) for result in results)
+    summary = graph.compress_dialogue(["Discuss project", "Resolve blockers"], "sess")
+    assert summary["events"]
+    queries = graph.conflict_queries()
+    assert queries
+
+
 def test_profiler_and_empathy_modulation() -> None:
     profiler = OnDeviceProfiler(decay=0.9)
     signals = [
@@ -163,6 +250,7 @@ def test_profiler_and_empathy_modulation() -> None:
         InteractionSignal(type="formality", value=0.6, weight=1.0),
     ]
     profile = profiler.bulk_record("user-42", signals)
+    profiler.unlock("user-42", Achievement(identifier="onboarding", description="Completed onboarding"))
     aggregator = SecureAggregator()
     aggregator.submit(ModelUpdate(user_id="user-42", values={"tone": profile.tone_preference}, clipping=0.5))
     aggregator.submit(ModelUpdate(user_id="user-99", values={"tone": -0.1}, clipping=1.0))
@@ -175,6 +263,16 @@ def test_profiler_and_empathy_modulation() -> None:
     assert -1.0 <= adjustments["tone"] <= 1.0
     assert 0.2 <= adjustments["tempo"] <= 3.0
     assert "style::formality" in adjustments
+    selector = AdaptivePromptSelector()
+    examples = [
+        {"id": 1, "tags": ["design", "pitch"]},
+        {"id": 2, "tags": ["legal", "analysis"]},
+    ]
+    chosen = selector.select_examples(profile, "Design pitch deck", examples)
+    assert chosen
+    engine = MotivationEngine()
+    suggestions = engine.recommend(profile)
+    assert suggestions
 
 
 def test_active_learning_prioritises_low_confidence_domains() -> None:

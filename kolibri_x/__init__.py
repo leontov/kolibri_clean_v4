@@ -1,22 +1,53 @@
 """Kolibri-x MVP package."""
-from .core.encoders import ASREncoder, FusionResult, FusionTransformer, ImageEncoder, TextEncoder
-from .core.planner import NeuroSemanticPlanner, Plan, PlanStep
-from .kg.graph import Edge, KnowledgeGraph, Node
+from .core.encoders import (
+    ASREncoder,
+    AdaptiveAudioEncoder,
+    AdaptiveCrossModalTransformer,
+    ContinualLearner,
+    DiffusionVisionEncoder,
+    FusionResult,
+    FusionTransformer,
+    ImageEncoder,
+    ModalityCompiler,
+    ModalitySignal,
+    ResolutionController,
+    ResolutionDecision,
+    SensorEvent,
+    SensorHub,
+    TemporalAlignmentEngine,
+    TextEncoder,
+)
+from .core.planner import (
+    AgentCoordinator,
+    HierarchicalPlan,
+    MissionLibrary,
+    NeuroSemanticPlanner,
+    Plan,
+    PlanNode,
+    PlanStep,
+    RiskAssessment,
+    RiskAssessor,
+)
+from .kg.graph import Edge, KnowledgeGraph, Node, VerificationResult
 from .kg.ingest import IngestionReport, KnowledgeDocument, KnowledgeIngestor
 from .kg.rag import RAGPipeline, RetrievedFact
 from .eval.active_learning import ActiveLearner, AnnotationRequest, CandidateExample, UncertaintyScorer
 from .eval.missions import Mission, MissionOutcome, MissionPack
 from .eval.mksi import MetricBreakdown, compute_metrics, metrics_report
 from .personalization import (
+    Achievement,
+    AdaptivePromptSelector,
     EmpathyContext,
     EmpathyModulator,
+    EmotionalSnapshot,
     InteractionSignal,
     ModelUpdate,
+    MotivationEngine,
     OnDeviceProfiler,
     SecureAggregator,
     UserProfile,
 )
-from .privacy.consent import ConsentRecord, PrivacyOperator
+from .privacy.consent import AccessProof, ConsentRecord, PolicyLayer, PrivacyOperator, SecurityIncident
 from .runtime.cache import OfflineCache
 from .runtime.iot import IoTBridge, IoTCommand, IoTPolicy
 from .runtime.journal import ActionJournal, JournalEntry
@@ -35,21 +66,30 @@ from .xai.reasoning import ReasoningLog, ReasoningStep
 
 __all__ = [
     "ASREncoder",
+    "AdaptiveAudioEncoder",
+    "AdaptiveCrossModalTransformer",
+    "AdaptivePromptSelector",
+    "Achievement",
     "ActiveLearner",
     "AnnotationRequest",
+    "AgentCoordinator",
+    "AccessProof",
     "ConsentRecord",
     "ActionJournal",
     "EmpathyContext",
     "EmpathyModulator",
+    "EmotionalSnapshot",
     "EvidenceItem",
     "Edge",
     "ExplanationPanel",
     "ExplanationTimeline",
+    "ContinualLearner",
     "FusionResult",
     "FusionTransformer",
     "IoTBridge",
     "IoTCommand",
     "IoTPolicy",
+    "HierarchicalPlan",
     "ImageEncoder",
     "IngestionReport",
     "InteractionSignal",
@@ -61,14 +101,20 @@ __all__ = [
     "Mission",
     "MissionOutcome",
     "MissionPack",
+    "MissionLibrary",
     "ModelUpdate",
+    "ModalityCompiler",
+    "ModalitySignal",
+    "MotivationEngine",
     "NeuroSemanticPlanner",
     "Node",
     "OfflineCache",
     "OnDeviceProfiler",
     "JournalEntry",
     "Plan",
+    "PlanNode",
     "PlanStep",
+    "PolicyLayer",
     "PrivacyOperator",
     "RAGPipeline",
     "ReminderEvent",
@@ -76,16 +122,25 @@ __all__ = [
     "ReasoningLog",
     "ReasoningStep",
     "RetrievedFact",
+    "ResolutionController",
+    "ResolutionDecision",
+    "RiskAssessment",
+    "RiskAssessor",
     "RuntimeRequest",
     "RuntimeResponse",
+    "SecurityIncident",
+    "SensorEvent",
+    "SensorHub",
     "SecureAggregator",
     "SkillManifest",
     "SkillStore",
     "SkillExecution",
     "SkillExecutionError",
     "SkillSandbox",
+    "TemporalAlignmentEngine",
     "TaskStepState",
     "TextEncoder",
+    "VerificationResult",
     "UncertaintyScorer",
     "UserProfile",
     "Workflow",

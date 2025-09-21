@@ -5,9 +5,22 @@ from dataclasses import dataclass, field
 from datetime import datetime
 import hashlib
 import json
-from typing import Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence
+from collections.abc import Iterable as IterableABC
+from typing import Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
-from kolibri_x.core.encoders import ASREncoder, FusionTransformer, ImageEncoder, TextEncoder
+from kolibri_x.core.encoders import (
+    ASREncoder,
+    AdaptiveAudioEncoder,
+    AdaptiveCrossModalTransformer,
+    DiffusionVisionEncoder,
+    FusionTransformer,
+    ImageEncoder,
+    ModalitySignal,
+    SensorEvent,
+    SensorHub,
+    TemporalAlignmentEngine,
+    TextEncoder,
+)
 from kolibri_x.core.planner import NeuroSemanticPlanner, Plan, PlanStep
 from kolibri_x.kg.graph import KnowledgeGraph
 from kolibri_x.kg.rag import RAGPipeline
@@ -103,7 +116,10 @@ class KolibriRuntime:
         text_encoder: Optional[TextEncoder] = None,
         asr: Optional[ASREncoder] = None,
         image_encoder: Optional[ImageEncoder] = None,
+        audio_encoder: Optional[AdaptiveAudioEncoder] = None,
+        vision_encoder: Optional[DiffusionVisionEncoder] = None,
         fusion: Optional[FusionTransformer] = None,
+        cross_fusion: Optional[AdaptiveCrossModalTransformer] = None,
         planner: Optional[NeuroSemanticPlanner] = None,
         rag: Optional[RAGPipeline] = None,
         skill_store: Optional[SkillStore] = None,
@@ -116,12 +132,19 @@ class KolibriRuntime:
         iot_bridge: Optional[IoTBridge] = None,
         workflow_manager: Optional[WorkflowManager] = None,
         knowledge_ingestor: Optional[KnowledgeIngestor] = None,
+        sensor_hub: Optional[SensorHub] = None,
+        alignment_engine: Optional[TemporalAlignmentEngine] = None,
+        fusion_budget: float = 1.5,
     ) -> None:
         self.graph = graph or KnowledgeGraph()
         self.text_encoder = text_encoder or TextEncoder(dim=32)
         self.asr = asr or ASREncoder()
         self.image_encoder = image_encoder or ImageEncoder(dim=32)
+        self.audio_encoder = audio_encoder or AdaptiveAudioEncoder(dim=16)
+        self.vision_encoder = vision_encoder or DiffusionVisionEncoder(dim=32, frame_window=4)
         self.fusion = fusion or FusionTransformer(dim=32)
+        self.cross_fusion = cross_fusion
+        self.fusion_budget = fusion_budget
         self.planner = planner or NeuroSemanticPlanner()
         self.skill_store = skill_store or SkillStore()
         self.sandbox = sandbox or SkillSandbox()
@@ -134,6 +157,8 @@ class KolibriRuntime:
         self.workflow_manager = workflow_manager or WorkflowManager()
         self.ingestor = knowledge_ingestor or KnowledgeIngestor()
         self.rag = rag or RAGPipeline(self.graph, encoder=self.text_encoder)
+        self.sensor_hub = sensor_hub or SensorHub()
+        self.alignment_engine = alignment_engine or TemporalAlignmentEngine()
         skills = self.skill_store.list()
         if skills:
             self.planner.register_skills(skills)
@@ -146,8 +171,14 @@ class KolibriRuntime:
         reasoning = ReasoningLog()
         filtered_modalities = self._enforce_privacy(request.user_id, request.modalities, reasoning)
         transcript = self._compose_transcript(filtered_modalities)
-        embeddings = self._encode_modalities(filtered_modalities, transcript, reasoning)
-        fusion_result = self.fusion.fuse(embeddings) if embeddings else None
+        embeddings, signals = self._encode_modalities(
+            request.user_id, filtered_modalities, transcript, reasoning
+        )
+        fusion_result = None
+        if signals and self.cross_fusion:
+            fusion_result = self.cross_fusion.fuse(signals, budget=self.fusion_budget)
+        elif embeddings:
+            fusion_result = self.fusion.fuse(embeddings)
         if fusion_result:
             self.journal.append(
                 "fusion",
@@ -354,17 +385,49 @@ class KolibriRuntime:
 
     def _encode_modalities(
         self,
+        user_id: str,
         modalities: Mapping[str, object],
         transcript: str,
         reasoning: ReasoningLog,
-    ) -> Mapping[str, Sequence[float]]:
+    ) -> Tuple[Mapping[str, Sequence[float]], Sequence[ModalitySignal]]:
         embeddings: MutableMapping[str, Sequence[float]] = {}
+        signals: List[ModalitySignal] = []
         if transcript:
-            embeddings["text"] = self.text_encoder.encode(transcript)
+            text_embedding = self.text_encoder.encode(transcript)
+            embeddings["text"] = text_embedding
+            signals.append(ModalitySignal(name="text", embedding=text_embedding, quality=0.9))
+        audio_value = modalities.get("audio")
+        if isinstance(audio_value, (list, tuple)):
+            audio_embedding = self.audio_encoder.encode(audio_value, user_id=user_id)
+            embeddings["audio"] = audio_embedding
+            signals.append(ModalitySignal(name="audio", embedding=audio_embedding, quality=0.7))
         image_value = modalities.get("image")
         if image_value is not None:
-            embeddings["image"] = self.image_encoder.encode(image_value)
-        return embeddings
+            image_embedding = self.image_encoder.encode(image_value)
+            embeddings["image"] = image_embedding
+            signals.append(ModalitySignal(name="image", embedding=image_embedding, quality=0.6))
+        video_value = modalities.get("video")
+        if isinstance(video_value, IterableABC):
+            video_embedding = self.vision_encoder.encode_video(video_value)
+            embeddings["video"] = video_embedding
+            signals.append(ModalitySignal(name="video", embedding=video_embedding, quality=0.8))
+        sensor_payload = modalities.get("sensors")
+        if isinstance(sensor_payload, IterableABC):
+            for raw in sensor_payload:
+                if isinstance(raw, SensorEvent):
+                    event = raw
+                else:
+                    event = SensorEvent(**raw)
+                self.sensor_hub.ingest(event)
+            sequences = self.sensor_hub.to_sequences()
+            aligned = self.alignment_engine.align(sequences)
+            reasoning.add_step(
+                "sensor_alignment",
+                f"aligned {len(aligned)} sensor streams",
+                list(aligned.keys()),
+                confidence=0.5,
+            )
+        return embeddings, signals
 
     def _execute_plan(
         self,

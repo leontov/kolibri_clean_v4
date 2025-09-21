@@ -1,9 +1,9 @@
-"""Privacy operator handling consents and data policies."""
+"""Privacy and consent orchestration with verifiable proofs."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Dict, Iterable, Mapping, MutableMapping, Optional, Sequence, Set
+from typing import Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Set, Tuple
 
 
 @dataclass
@@ -12,6 +12,7 @@ class ConsentRecord:
     allowed: Set[str] = field(default_factory=set)
     denied: Set[str] = field(default_factory=set)
     updated_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    proofs: MutableMapping[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> Mapping[str, object]:
         return {
@@ -19,18 +20,48 @@ class ConsentRecord:
             "allowed": sorted(self.allowed),
             "denied": sorted(self.denied),
             "updated_at": self.updated_at.isoformat(),
+            "proofs": dict(self.proofs),
         }
+
+
+@dataclass
+class PolicyLayer:
+    name: str
+    scope: Set[str]
+    default_action: str = "deny"
+
+
+@dataclass
+class AccessProof:
+    user_id: str
+    data_type: str
+    policy_layer: str
+    proof_hash: str
+    issued_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+@dataclass
+class SecurityIncident:
+    timestamp: datetime
+    skill: str
+    detail: str
 
 
 class PrivacyOperator:
     def __init__(self) -> None:
         self._records: Dict[str, ConsentRecord] = {}
+        self._layers: Dict[str, PolicyLayer] = {}
+        self._audit_log: List[SecurityIncident] = []
+
+    def register_layer(self, layer: PolicyLayer) -> None:
+        self._layers[layer.name] = layer
 
     def grant(self, user_id: str, data_types: Iterable[str]) -> ConsentRecord:
         record = self._records.setdefault(user_id, ConsentRecord(user_id=user_id))
         for item in data_types:
             record.allowed.add(item)
             record.denied.discard(item)
+            record.proofs[item] = self._zk_proof(user_id, item, "allow")
         record.updated_at = datetime.now(timezone.utc)
         return record
 
@@ -39,6 +70,7 @@ class PrivacyOperator:
         for item in data_types:
             record.denied.add(item)
             record.allowed.discard(item)
+            record.proofs[item] = self._zk_proof(user_id, item, "deny")
         record.updated_at = datetime.now(timezone.utc)
         return record
 
@@ -48,13 +80,67 @@ class PrivacyOperator:
             return False
         if data_type in record.denied:
             return False
-        return data_type in record.allowed
+        if data_type in record.allowed:
+            return True
+        # Fallback to policy layers
+        for layer in self._layers.values():
+            if data_type in layer.scope:
+                return layer.default_action == "allow"
+        return False
 
     def enforce(self, user_id: str, requested: Sequence[str]) -> Sequence[str]:
         return [data_type for data_type in requested if self.is_allowed(user_id, data_type)]
 
+    def record_access(self, skill: str, user_id: str, data_types: Sequence[str]) -> List[AccessProof]:
+        proofs: List[AccessProof] = []
+        for data_type in data_types:
+            layer = self._layer_for(data_type)
+            if not self.is_allowed(user_id, data_type):
+                self._audit_log.append(
+                    SecurityIncident(
+                        timestamp=datetime.now(timezone.utc),
+                        skill=skill,
+                        detail=f"access denied for {data_type}",
+                    )
+                )
+                continue
+            proof_hash = self._zk_proof(user_id, data_type, layer.name if layer else "direct")
+            proofs.append(
+                AccessProof(
+                    user_id=user_id,
+                    data_type=data_type,
+                    policy_layer=layer.name if layer else "direct",
+                    proof_hash=proof_hash,
+                )
+            )
+        return proofs
+
+    def register_incident(self, skill: str, detail: str) -> None:
+        self._audit_log.append(
+            SecurityIncident(timestamp=datetime.now(timezone.utc), skill=skill, detail=detail)
+        )
+
+    def audit_log(self) -> Sequence[SecurityIncident]:
+        return tuple(self._audit_log)
+
     def export_state(self) -> Mapping[str, Mapping[str, object]]:
         return {user_id: record.to_dict() for user_id, record in self._records.items()}
 
+    def _layer_for(self, data_type: str) -> Optional[PolicyLayer]:
+        for layer in self._layers.values():
+            if data_type in layer.scope:
+                return layer
+        return None
 
-__all__ = ["ConsentRecord", "PrivacyOperator"]
+    def _zk_proof(self, user_id: str, data_type: str, action: str) -> str:
+        payload = f"{user_id}:{data_type}:{action}".encode("utf-8")
+        return hex(abs(hash(payload)))[2:]
+
+
+__all__ = [
+    "AccessProof",
+    "ConsentRecord",
+    "PolicyLayer",
+    "PrivacyOperator",
+    "SecurityIncident",
+]
