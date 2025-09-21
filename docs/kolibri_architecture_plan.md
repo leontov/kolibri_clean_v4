@@ -158,7 +158,9 @@ kolibri-x/
 - **Reasoning transparency:** Reasoning logs capture retrieval and verification steps for the forthcoming XAI console.
 - **CLI harness:** `kolibri_x.apps.cli` wires the components together so teams can experiment with queries against a local KG snapshot.
 
+
 ### Stage B — Implementation Progress (Weeks 5–6)
 - **Personalization core:** Added an on-device profiler with federated aggregation primitives and an empathy modulator that translates behavioural signals into tone/tempo adjustments.
 - **Active learning loop:** Introduced a deterministic uncertainty scorer and annotation request planner to focus human labeling on low-confidence, low-coverage domains.
 - **Workflow planner:** Delivered runtime support for long-lived projects with progress tracking, reminders, and overdue detection in preparation for mission-scale orchestration.
+

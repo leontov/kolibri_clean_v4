@@ -10,6 +10,7 @@ from kolibri_x.core.encoders import TextEncoder
 from kolibri_x.core.planner import NeuroSemanticPlanner
 from kolibri_x.kg.graph import Edge, KnowledgeGraph, Node
 from kolibri_x.kg.rag import RAGPipeline
+
 from kolibri_x.eval.active_learning import ActiveLearner, CandidateExample
 from kolibri_x.personalization import (
     EmpathyContext,
@@ -22,6 +23,10 @@ from kolibri_x.personalization import (
 from kolibri_x.privacy.consent import PrivacyOperator
 from kolibri_x.runtime.cache import OfflineCache
 from kolibri_x.runtime.workflow import ReminderRule, WorkflowManager
+
+from kolibri_x.privacy.consent import PrivacyOperator
+from kolibri_x.runtime.cache import OfflineCache
+
 from kolibri_x.skills.store import SkillManifest, SkillStore
 from kolibri_x.xai.reasoning import ReasoningLog
 
@@ -113,6 +118,7 @@ def test_offline_cache_eviction() -> None:
     assert cache.size() == 0
 
 
+
 def test_profiler_and_empathy_modulation() -> None:
     profiler = OnDeviceProfiler(decay=0.9)
     signals = [
@@ -175,3 +181,4 @@ def test_workflow_manager_tracks_progress_and_reminders() -> None:
 
     overdue = manager.overdue_workflows(timestamp=datetime(2025, 1, 4, 9, 0, 0))
     assert workflow in overdue
+
