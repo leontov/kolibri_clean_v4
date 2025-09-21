@@ -2,6 +2,9 @@ from datetime import datetime, timedelta
 import sys
 from pathlib import Path
 
+from typing import Mapping
+
+
 import pytest
 
 sys.path.append(str(Path(__file__).resolve().parents[1]))
@@ -22,10 +25,15 @@ from kolibri_x.personalization import (
 )
 from kolibri_x.privacy.consent import PrivacyOperator
 from kolibri_x.runtime.cache import OfflineCache
+
+from kolibri_x.runtime.orchestrator import KolibriRuntime, RuntimeRequest, SkillSandbox
+from kolibri_x.runtime.workflow import ReminderRule, WorkflowManager
+
 from kolibri_x.runtime.workflow import ReminderRule, WorkflowManager
 
 from kolibri_x.privacy.consent import PrivacyOperator
 from kolibri_x.runtime.cache import OfflineCache
+
 
 from kolibri_x.skills.store import SkillManifest, SkillStore
 from kolibri_x.xai.reasoning import ReasoningLog
@@ -181,4 +189,49 @@ def test_workflow_manager_tracks_progress_and_reminders() -> None:
 
     overdue = manager.overdue_workflows(timestamp=datetime(2025, 1, 4, 9, 0, 0))
     assert workflow in overdue
+
+
+
+def test_runtime_orchestrator_end_to_end(
+    knowledge_graph: KnowledgeGraph, skill_store: SkillStore
+) -> None:
+    sandbox = SkillSandbox()
+
+    def writer_executor(payload: Mapping[str, object]) -> Mapping[str, object]:
+        return {"draft": f"Outline for {payload['goal']}", "modalities": payload.get("modalities", [])}
+
+    sandbox.register("writer", writer_executor)
+
+    cache = OfflineCache(ttl=timedelta(minutes=30))
+    runtime = KolibriRuntime(
+        graph=knowledge_graph,
+        skill_store=skill_store,
+        sandbox=sandbox,
+        cache=cache,
+    )
+    runtime.privacy.grant("user-1", ["text"])
+
+    request = RuntimeRequest(
+        user_id="user-1",
+        goal="Draft an investor pitch deck",
+        modalities={"text": "Need a compelling narrative for Kolibri-x."},
+        hints=["writer"],
+        signals=[InteractionSignal(type="tone", value=0.2, weight=1.5)],
+        empathy=EmpathyContext(sentiment=0.1, urgency=0.3, energy=0.2),
+        top_k=3,
+    )
+
+    response = runtime.process(request)
+    assert response.plan.steps, "planner should produce at least one step"
+    assert response.executions[0].output["status"] == "ok"
+    assert response.answer["support"], "RAG pipeline should return supporting facts"
+    assert "tone" in response.adjustments and "tempo" in response.adjustments
+    assert runtime.journal.verify(), "journal chain must remain consistent"
+    assert not response.cached
+
+    cached_response = runtime.process(request)
+    assert cached_response.cached, "second invocation should use offline cache"
+    assert cached_response.answer == response.answer
+    assert cached_response.executions[0].output == response.executions[0].output
+    assert cached_response.journal_tail, "journal tail should include recent entries"
 

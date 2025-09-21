@@ -159,6 +159,17 @@ kolibri-x/
 - **CLI harness:** `kolibri_x.apps.cli` wires the components together so teams can experiment with queries against a local KG snapshot.
 
 
+### 9.1 Sprint A Mini Status Report (Week 2)
+- **Roadmap alignment:** Stage A backlog stories for KG v1, RAG verification, and SkillStore manifests are implemented in code and exercised through the CLI harness, covering ~60% of the foundation milestone.
+- **In-flight work:** Multimodal fusion (cross-modal attention prototype) and reasoning visualization are in active development with interface contracts finalized and test stubs prepared.
+- **Upcoming focus:** Finalize ASR streaming ingestion, extend privacy operator with consent override auditing, and prepare evaluation seeds for the Stage B profiler and empathy layer.
+- **Risks/mitigations:**
+  - *Fusion readiness:* mitigate by pairing the planner with deterministic fixtures so downstream teams can integrate before transformer fine-tuning completes.
+  - *Verification load:* build lightweight caching for KG lookups to keep RAG latency within target budgets while datasets grow.
+- **mKSI outlook:** Early dry-runs on the CLI harness indicate explainability coverage via reasoning logs and KG citations, setting a baseline E-score of 0.62 with plans to lift it above 0.7 once visualization and ASR evidence links land.
+
+
+
 ### Stage B — Implementation Progress (Weeks 5–6)
 - **Personalization core:** Added an on-device profiler with federated aggregation primitives and an empathy modulator that translates behavioural signals into tone/tempo adjustments.
 - **Active learning loop:** Introduced a deterministic uncertainty scorer and annotation request planner to focus human labeling on low-confidence, low-coverage domains.

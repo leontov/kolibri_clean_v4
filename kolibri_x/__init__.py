@@ -16,9 +16,22 @@ from .personalization import (
 )
 from .privacy.consent import ConsentRecord, PrivacyOperator
 from .runtime.cache import OfflineCache
+
+from .runtime.journal import ActionJournal, JournalEntry
+from .runtime.orchestrator import (
+    KolibriRuntime,
+    RuntimeRequest,
+    RuntimeResponse,
+    SkillExecution,
+    SkillExecutionError,
+    SkillSandbox,
+)
+from .runtime.workflow import ReminderEvent, ReminderRule, TaskStepState, Workflow, WorkflowManager
+
 from .runtime.workflow import ReminderEvent, ReminderRule, TaskStepState, Workflow, WorkflowManager
 from .privacy.consent import ConsentRecord, PrivacyOperator
 from .runtime.cache import OfflineCache
+
 from .skills.store import SkillManifest, SkillStore
 from .xai.reasoning import ReasoningLog, ReasoningStep
 
@@ -28,10 +41,19 @@ __all__ = [
     "ActiveLearner",
     "AnnotationRequest",
     "ConsentRecord",
+    "ActionJournal",
+    "EmpathyContext",
+    "EmpathyModulator",
+
+
+    "ActiveLearner",
+    "AnnotationRequest",
+    "ConsentRecord",
     "EmpathyContext",
     "EmpathyModulator",
 
     "ConsentRecord",
+
 
     "Edge",
     "FusionResult",
@@ -40,11 +62,20 @@ __all__ = [
 
     "InteractionSignal",
     "KnowledgeGraph",
+    "KolibriRuntime",
+
+
+    "InteractionSignal",
+    "KnowledgeGraph",
+
     "ModelUpdate",
     "NeuroSemanticPlanner",
     "Node",
     "OfflineCache",
     "OnDeviceProfiler",
+
+    "JournalEntry",
+
 
     "KnowledgeGraph",
     "NeuroSemanticPlanner",
@@ -61,9 +92,20 @@ __all__ = [
     "ReasoningLog",
     "ReasoningStep",
     "RetrievedFact",
+
+    "RuntimeRequest",
+    "RuntimeResponse",
     "SecureAggregator",
     "SkillManifest",
     "SkillStore",
+    "SkillExecution",
+    "SkillExecutionError",
+    "SkillSandbox",
+
+    "SecureAggregator",
+    "SkillManifest",
+    "SkillStore",
+
     "TaskStepState",
     "TextEncoder",
     "UncertaintyScorer",
@@ -71,11 +113,13 @@ __all__ = [
     "Workflow",
     "WorkflowManager",
 
+
     "ReasoningLog",
     "ReasoningStep",
     "RetrievedFact",
     "SkillManifest",
     "SkillStore",
     "TextEncoder",
+
 
 ]
