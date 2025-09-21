@@ -30,6 +30,8 @@ interface ChatState {
   chain: ChainBlock[];
   activeView: "chat" | "ledger" | "settings";
   connected: boolean;
+  chatStream: EventSource | null;
+  chainStream: EventSource | null;
   preferences: {
     ttsRate: number;
   };
@@ -57,12 +59,19 @@ export const useChatStore = create<ChatState>()(
       chain: [],
       activeView: "chat",
       connected: false,
+      chatStream: null,
+      chainStream: null,
       preferences: {
         ttsRate: 1
       },
       connect: () => {
-        const { sessionId, connected } = get();
-        if (connected) return;
+        const { sessionId, connected, chatStream: existingChatStream, chainStream: existingChainStream } = get();
+        if (connected && existingChatStream && existingChatStream.readyState !== EventSource.CLOSED) {
+          return;
+        }
+        existingChatStream?.close();
+        existingChainStream?.close();
+
         const chatStream = new EventSource(
           `${API_BASE}/api/v1/chat/stream?session_id=${sessionId}`
         );
@@ -148,7 +157,7 @@ export const useChatStore = create<ChatState>()(
           }));
         });
 
-        set({ connected: true });
+        set({ connected: true, chatStream, chainStream });
       },
       sendMessage: async content => {
         const { sessionId } = get();
