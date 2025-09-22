@@ -343,6 +343,38 @@ def test_adaptive_cross_modal_transformer_decides_depth() -> None:
     assert result.metadata["layers"]["text"] >= result.metadata["layers"]["image"]
 
 
+def test_runtime_adaptive_fusion_weights() -> None:
+    runtime = KolibriRuntime()
+    assert isinstance(runtime.cross_fusion, AdaptiveCrossModalTransformer)
+
+    reasoning = ReasoningLog()
+    embeddings = {
+        "text": [1.0, 0.4, 0.3, 0.2],
+        "audio": [0.2, 0.1, 0.05, 0.02],
+        "video": [0.3, 0.3, 0.2, 0.1],
+    }
+    signals = [
+        ModalitySignal(name="text", embedding=embeddings["text"], quality=0.95, latency_ms=12.0),
+        ModalitySignal(name="audio", embedding=embeddings["audio"], quality=0.5, latency_ms=45.0),
+        ModalitySignal(name="video", embedding=embeddings["video"], quality=0.8, latency_ms=200.0),
+    ]
+
+    runtime._fuse_modalities(embeddings, signals, reasoning)
+
+    entry = runtime.journal.tail(1)[0]
+    weights = entry.payload["weights"]
+    assert sum(weights.values()) == pytest.approx(1.0)
+    assert weights["text"] > weights["audio"] > weights["video"]
+
+    layers = entry.payload["metadata"]["layers"]
+    assert layers["text"] >= layers["audio"] >= layers["video"]
+
+    metrics_report = runtime.metrics.report()
+    assert metrics_report[f"fusion_layers::text"]["count"] >= 1.0
+
+    assert any("layers" in step.message for step in reasoning.steps())
+
+
 def test_diffusion_encoder_and_audio_calibration() -> None:
     encoder = DiffusionVisionEncoder(dim=16, frame_window=2)
     frames = [bytes([index] * 3) for index in range(4)]

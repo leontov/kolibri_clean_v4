@@ -150,7 +150,8 @@ class KolibriRuntime:
         self.audio_encoder = audio_encoder or AdaptiveAudioEncoder(dim=16)
         self.vision_encoder = vision_encoder or DiffusionVisionEncoder(dim=32, frame_window=4)
         self.fusion = fusion or FusionTransformer(dim=32)
-        self.cross_fusion = cross_fusion
+        cross_fusion_dim = getattr(self.fusion, "dim", 32)
+        self.cross_fusion = cross_fusion or AdaptiveCrossModalTransformer(dim=cross_fusion_dim)
         self.fusion_budget = fusion_budget
         self.planner = planner or NeuroSemanticPlanner()
         self.skill_store = skill_store or SkillStore()
@@ -525,17 +526,32 @@ class KolibriRuntime:
         elif embeddings:
             fusion_result = self.fusion.fuse(embeddings)
         if fusion_result:
+            metadata = dict(fusion_result.metadata or {})
+            layers = metadata.get("layers") if isinstance(metadata, Mapping) else None
+            if isinstance(layers, Mapping):
+                for modality, depth in layers.items():
+                    try:
+                        self.metrics.observe(f"fusion_layers::{modality}", float(depth))
+                    except Exception:  # pragma: no cover - defensive guard against bad metadata
+                        continue
             self.journal.append(
                 "fusion",
                 {
                     "modalities": list(embeddings.keys()),
                     "weights": dict(fusion_result.modality_weights),
                     "embedding_preview": fusion_result.embedding[:4],
+                    "metadata": metadata,
                 },
             )
+            layer_summary = ""
+            if isinstance(layers, Mapping) and layers:
+                layer_summary = ", ".join(f"{name}:{layers[name]}" for name in sorted(layers))
+            message = f"fused {len(embeddings)} modalities"
+            if layer_summary:
+                message += f" with layers {layer_summary}"
             reasoning.add_step(
                 "fusion",
-                f"fused {len(embeddings)} modalities",
+                message,
                 fusion_result.modality_weights.keys(),
                 confidence=0.6,
             )
