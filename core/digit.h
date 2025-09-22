@@ -29,5 +29,7 @@ KolDigit *digit_create(uint8_t id, uint8_t depth, uint32_t seed);
 void      digit_free(KolDigit *digit);
 float     digit_vote(KolDigit *digit, const KolState *state);
 void      digit_learn(KolDigit *digit, const KolFormula *formula, const KolMetrics *metrics);
+void      digit_self_train(KolDigit *digit, const KolDataset *dataset);
+const KolExperience *digit_best_experience(const KolDigit *digit);
 
 #endif

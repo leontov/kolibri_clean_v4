@@ -6,15 +6,19 @@
 
 #include "chain.h"
 #include "persist.h"
+#include "dsl.h"
+#include "language.h"
 
 static KolEngine *g_engine = NULL;
 static KolEvent   g_event;
 static int        g_has_event = 0;
+static KolLanguage g_language;
 
 int kol_init(uint8_t depth, uint32_t seed) {
     kol_reset();
     g_engine = engine_create(depth, seed);
     g_has_event = 0;
+    language_reset(&g_language);
     if (!g_engine) {
         return -1;
     }
@@ -27,6 +31,7 @@ void kol_reset(void) {
         g_engine = NULL;
     }
     g_has_event = 0;
+    language_reset(&g_language);
 }
 
 int kol_tick(void) {
@@ -43,10 +48,51 @@ int kol_chat_push(const char *text) {
     if (!g_engine) {
         return -1;
     }
+    if (!text) {
+        return -1;
+    }
+    language_observe(&g_language, text);
     if (engine_ingest_text(g_engine, text, &g_event) != 0) {
         return -1;
     }
     g_has_event = 1;
+    return 0;
+}
+
+int kol_bootstrap(int steps, KolBootstrapReport *report) {
+    if (!g_engine || steps <= 0) {
+        return -1;
+    }
+    KolBootstrapReport local;
+    memset(&local, 0, sizeof(local));
+    local.start_step = g_engine->step;
+    double best_eff = -1e9;
+    for (int i = 0; i < steps; ++i) {
+        if (kol_tick() != 0) {
+            return -1;
+        }
+        double eff = g_engine->last.eff;
+        if (eff > best_eff) {
+            best_eff = eff;
+            local.best_eff = eff;
+            local.best_compl = g_engine->last.compl;
+            local.best_step = g_engine->step;
+            char *formula = dsl_print(g_engine->current);
+            if (formula) {
+                strncpy(local.best_formula, formula, sizeof(local.best_formula) - 1);
+                local.best_formula[sizeof(local.best_formula) - 1] = '\0';
+                free(formula);
+            } else {
+                local.best_formula[0] = '\0';
+            }
+        }
+    }
+    local.executed = g_engine->step - local.start_step;
+    local.final_eff = g_engine->last.eff;
+    local.final_compl = g_engine->last.compl;
+    if (report) {
+        *report = local;
+    }
     return 0;
 }
 
@@ -129,4 +175,8 @@ void *kol_alloc(size_t size) {
 
 void kol_free(void *ptr) {
     free(ptr);
+}
+
+int kol_language_generate(char *buf, size_t cap) {
+    return language_generate(&g_language, buf, cap);
 }

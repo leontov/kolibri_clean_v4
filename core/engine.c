@@ -58,14 +58,33 @@ static KolDigit *get_digit(KolDigit *root, uint8_t idx) {
 }
 
 static KolFormula *choose_candidate(KolEngine *engine, KolDigit *leader_digit, uint8_t leader_id) {
-    uint32_t local_state = leader_digit ? leader_digit->rng.state : (engine->step + 1u) * 811u;
     KolFormula *candidate = NULL;
-    if (engine->current && leader_id < 4) {
-        candidate = dsl_mutate(engine->current, &local_state);
-    } else if (engine->current && leader_id < 7) {
-        candidate = dsl_simplify(engine->current);
-    } else {
-        candidate = dsl_rand(&local_state, 3);
+    if (leader_digit) {
+        const KolExperience *best = digit_best_experience(leader_digit);
+        if (best && best->formula) {
+            double bias = rng_normalized(&leader_digit->rng);
+            uint32_t state = leader_digit->rng.state;
+            if (bias > 0.25) {
+                candidate = dsl_mutate(best->formula, &state);
+            }
+            if (!candidate) {
+                candidate = dsl_clone(best->formula);
+            }
+            leader_digit->rng.state = state;
+        }
+    }
+    uint32_t fallback_state = leader_digit ? leader_digit->rng.state : (engine->step + 1u) * 811u;
+    if (!candidate) {
+        if (engine->current && leader_id < 4) {
+            candidate = dsl_mutate(engine->current, &fallback_state);
+        } else if (engine->current && leader_id < 7) {
+            candidate = dsl_simplify(engine->current);
+        } else {
+            candidate = dsl_rand(&fallback_state, 3);
+        }
+        if (leader_digit) {
+            leader_digit->rng.state = fallback_state;
+        }
     }
     if (!candidate && engine->current) {
         candidate = dsl_clone(engine->current);
@@ -84,6 +103,7 @@ int engine_tick(KolEngine *engine, const KolEvent *in, KolOutput *out) {
         }
     }
     KolDigit *root = fractal_root(engine->fractal);
+    digit_self_train(root, &engine->dataset);
     KolDigit *digits[10];
     for (uint8_t i = 0; i < 10; ++i) {
         digits[i] = get_digit(root, i);
