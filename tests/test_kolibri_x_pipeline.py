@@ -400,6 +400,36 @@ def test_background_self_learning_accumulates_updates() -> None:
     assert history and history[-1]["updates"].get("writer")
 
 
+def test_background_self_learning_persistence(tmp_path: Path) -> None:
+    learner = BackgroundSelfLearner()
+    learner.enqueue(
+        "writer",
+        {"success": 1.0},
+        confidence=0.2,
+        metadata={"status": "ok"},
+        user_id="user-1",
+    )
+    initial_updates = learner.step()
+    assert "writer" in initial_updates
+    state_path = tmp_path / "self_learning.json"
+    learner.save(state_path)
+
+    restored = BackgroundSelfLearner()
+    restored.load(state_path)
+
+    assert restored.learner.snapshot() == learner.learner.snapshot()
+    assert restored.status()["pending"] == learner.status()["pending"]
+    assert restored.recent_samples() == learner.recent_samples()
+
+    restored.enqueue("writer", {"success": 1.0}, confidence=0.2, user_id="user-2")
+    continued = restored.step()
+    assert "writer" in continued
+    assert pytest.approx(continued["writer"]["success"], rel=1e-6) == pytest.approx(0.6, rel=1e-6)
+    samples = restored.recent_samples(limit=2)
+    assert len(samples) == 2
+    assert samples[-1].user_id == "user-2"
+
+
 def test_knowledge_graph_verification_and_compression() -> None:
     graph = KnowledgeGraph()
     node_a = Node(id="a", type="Claim", text="A", sources=["s1"], confidence=0.7, embedding=[1.0, 0.0])

@@ -6,6 +6,7 @@ import json
 from collections.abc import Iterable as IterableABC
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 from kolibri_x.core.encoders import (
@@ -142,7 +143,12 @@ class KolibriRuntime:
         sensor_hub: Optional[SensorHub] = None,
         alignment_engine: Optional[TemporalAlignmentEngine] = None,
         fusion_budget: float = 1.5,
+        self_learning_storage: Optional[str | Path] = None,
     ) -> None:
+        self._self_learning_path: Optional[Path] = None
+        self._self_learning_dirty = False
+        self._shutdown = False
+
         self.graph = graph or KnowledgeGraph()
         self.text_encoder = text_encoder or TextEncoder(dim=32)
         self.asr = asr or ASREncoder()
@@ -168,7 +174,16 @@ class KolibriRuntime:
         self.rag_cache = rag_cache or RAGCache()
         self.sensor_hub = sensor_hub or SensorHub()
         self.alignment_engine = alignment_engine or TemporalAlignmentEngine()
+        if self_learning_storage and self_learner is None:
+            self_learner = BackgroundSelfLearner()
         self.self_learner = self_learner
+        if self_learning_storage:
+            self._self_learning_path = Path(self_learning_storage).expanduser()
+        if self.self_learner and self._self_learning_path:
+            try:
+                self.self_learner.load(self._self_learning_path)
+            except FileNotFoundError:
+                pass
 
         skills = self.skill_store.list()
         if skills:
@@ -327,6 +342,7 @@ class KolibriRuntime:
             base_confidence = float(confidence_obj)
         base_confidence = max(0.0, min(base_confidence, 1.0))
 
+        mutated = False
         for execution in executions:
             skill = execution.skill or execution.step_id
             if not skill:
@@ -351,6 +367,7 @@ class KolibriRuntime:
                 },
                 user_id=request.user_id,
             )
+            mutated = True
         updates = self.self_learner.step()
         if updates:
             self.journal.append(
@@ -360,6 +377,9 @@ class KolibriRuntime:
                     "weights": {task: dict(weights) for task, weights in updates.items()},
                 },
             )
+        if mutated or updates:
+            if self._self_learning_path:
+                self._self_learning_dirty = True
 
     def dispatch_iot_command(
         self,
@@ -383,6 +403,23 @@ class KolibriRuntime:
             },
         )
         return acknowledgement
+
+    def shutdown(self) -> None:
+        """Persist self-learning state if a storage path is configured."""
+
+        if self._shutdown:
+            return
+        self._shutdown = True
+        if self.self_learner and self._self_learning_path:
+            self.self_learner.save(self._self_learning_path)
+            self._self_learning_dirty = False
+
+    def __del__(self) -> None:  # pragma: no cover - best-effort persistence
+        try:
+            if self._self_learning_dirty:
+                self.shutdown()
+        except Exception:
+            pass
 
     def ingest_document(self, document: KnowledgeDocument) -> IngestionReport:
         """Adds a document to the knowledge graph via the ingestor."""
