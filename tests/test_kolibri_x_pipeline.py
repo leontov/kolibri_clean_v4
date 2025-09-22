@@ -50,6 +50,7 @@ from kolibri_x.runtime.cache import OfflineCache  # noqa: E402
 from kolibri_x.runtime.iot import IoTBridge, IoTCommand, IoTPolicy  # noqa: E402
 from kolibri_x.runtime.journal import ActionJournal  # noqa: E402
 from kolibri_x.runtime.orchestrator import KolibriRuntime, RuntimeRequest, SkillSandbox  # noqa: E402
+from kolibri_x.runtime.self_learning import BackgroundSelfLearner  # noqa: E402
 from kolibri_x.runtime.workflow import ReminderRule, WorkflowManager  # noqa: E402
 from kolibri_x.skills.store import SkillManifest, SkillPolicyViolation, SkillStore  # noqa: E402
 from kolibri_x.xai.panel import ExplanationPanel  # noqa: E402
@@ -116,6 +117,7 @@ def _bootstrap_runtime(
 
     cache = OfflineCache(ttl=timedelta(minutes=30))
     journal = ActionJournal()
+    self_learner = BackgroundSelfLearner()
     runtime = KolibriRuntime(
         graph=knowledge_graph,
         skill_store=skill_store,
@@ -125,6 +127,7 @@ def _bootstrap_runtime(
         iot_bridge=iot_bridge,
         knowledge_ingestor=ingestor,
         workflow_manager=workflow_manager,
+        self_learner=self_learner,
     )
     runtime.privacy.grant("user-1", ["text"])
     runtime.privacy.grant("eval", ["text"])
@@ -370,6 +373,33 @@ def test_continual_learner_snapshot() -> None:
     assert update1["w1"] != update2["w1"]
 
 
+def test_background_self_learning_accumulates_updates() -> None:
+    learner = BackgroundSelfLearner()
+    learner.enqueue(
+        "writer",
+        {"success": 1.0, "penalty": 0.0},
+        confidence=0.25,
+        metadata={"status": "ok"},
+        user_id="user-1",
+    )
+    learner.enqueue(
+        "writer",
+        {"success": 0.0, "penalty": 1.0},
+        confidence=0.9,
+        metadata={"status": "error"},
+        user_id="user-2",
+    )
+    updates = learner.step()
+    assert "writer" in updates
+    writer_update = updates["writer"]
+    assert writer_update["success"] > 0
+    assert writer_update["penalty"] >= 0
+    status = learner.status()
+    assert status["pending"]["writer"] == 0
+    history = learner.history()
+    assert history and history[-1]["updates"].get("writer")
+
+
 def test_knowledge_graph_verification_and_compression() -> None:
     graph = KnowledgeGraph()
     node_a = Node(id="a", type="Claim", text="A", sources=["s1"], confidence=0.7, embedding=[1.0, 0.0])
@@ -479,6 +509,9 @@ def test_runtime_orchestrator_end_to_end(
     assert response.executions[0].output["status"] == "ok"
     assert response.answer["support"], "RAG pipeline should return supporting facts"
     assert "tone" in response.adjustments and "tempo" in response.adjustments
+    assert runtime.self_learner is not None
+    history = runtime.self_learner.history()
+    assert history and any(entry["updates"] for entry in history)
     assert runtime.journal.verify(), "journal chain must remain consistent"
     assert not response.cached
     assert "privacy_enforce" in response.metrics
@@ -488,6 +521,8 @@ def test_runtime_orchestrator_end_to_end(
     assert cached_response.executions[0].output == response.executions[0].output
     journal_events = [entry.event for entry in runtime.journal.tail(5)]
     assert "slo_snapshot" in journal_events
+    all_events = [entry.event for entry in runtime.journal.entries()]
+    assert "self_learning" in all_events
 
 
 def test_skill_policy_violation_blocks_execution(
