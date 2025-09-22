@@ -63,6 +63,54 @@ void persist_hash_block(const KolBlock *block, uint8_t out[32]) {
     }
 }
 
+void persist_quantize_formula(char *formula, size_t cap) {
+    if (!formula || cap == 0) {
+        return;
+    }
+    size_t src = 0;
+    size_t dst = 0;
+    char  *scratch = (char *)malloc(cap);
+    if (!scratch) {
+        return;
+    }
+    while (formula[src] != '\0' && dst + 1 < cap) {
+        unsigned char ch = (unsigned char)formula[src];
+        unsigned char next = (unsigned char)formula[src + 1];
+        int is_digit = isdigit(ch);
+        int is_signed = (ch == '-' || ch == '+') && (isdigit(next) || next == '.');
+        if (is_digit || is_signed) {
+            char *endptr = NULL;
+            double value = strtod(&formula[src], &endptr);
+            if (endptr && endptr != &formula[src]) {
+                double quantized = nearbyint(value * 1000.0) / 1000.0;
+                char   buf[32];
+                int    written = snprintf(buf, sizeof(buf), "%.4g", quantized);
+                if (written < 0) {
+                    written = 0;
+                }
+                for (int i = 0; i < written && dst + 1 < cap; ++i) {
+                    scratch[dst++] = buf[i];
+                }
+                src = (size_t)(endptr - formula);
+                continue;
+            }
+        }
+        scratch[dst++] = formula[src++];
+    }
+    scratch[dst] = '\0';
+    size_t total = dst + 1;
+    if (total > cap) {
+        total = cap;
+    }
+    memcpy(formula, scratch, total);
+    if (total < cap) {
+        memset(formula + total, 0, cap - total);
+    } else {
+        formula[cap - 1] = '\0';
+    }
+    free(scratch);
+}
+
 static void hex_encode(const uint8_t *data, size_t len, char *out, size_t out_len) {
     static const char HEX[] = "0123456789abcdef";
     if (out_len < len * 2 + 1) {

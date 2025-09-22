@@ -26,11 +26,33 @@ static void event_merge(KolEvent *dst, const KolEvent *src) {
         dst->length = capacity;
     }
     size_t remain = capacity > dst->length ? capacity - dst->length : 0;
-    size_t to_copy = src->length < remain ? src->length : remain;
-    if (to_copy > 0) {
-        memcpy(dst->digits + dst->length, src->digits, to_copy);
-        dst->length += to_copy;
+    if (remain == 0) {
+        return;
     }
+    uint8_t src_stride = src->stride ? src->stride : 1u;
+    if (dst->length == 0) {
+        dst->stride = src_stride;
+    } else if (dst->stride == 0) {
+        /* mixed content already */
+    } else if (src_stride != dst->stride) {
+        dst->stride = 0;
+    }
+    size_t to_copy = src->length;
+    if (src_stride > 1u) {
+        size_t available_groups = remain / src_stride;
+        size_t src_groups = to_copy / src_stride;
+        size_t groups = available_groups < src_groups ? available_groups : src_groups;
+        to_copy = groups * src_stride;
+    } else {
+        if (to_copy > remain) {
+            to_copy = remain;
+        }
+    }
+    if (to_copy == 0) {
+        return;
+    }
+    memcpy(dst->digits + dst->length, src->digits, to_copy);
+    dst->length += to_copy;
 }
 
 
