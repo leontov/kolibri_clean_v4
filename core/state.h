@@ -17,6 +17,7 @@ typedef struct {
 typedef struct {
     uint8_t digits[128];
     size_t length;
+    uint8_t stride;
 } KolEvent;
 
 typedef struct {
