@@ -38,6 +38,10 @@ async function boot() {
   const msgEl = document.getElementById('msg');
   const effEl = document.getElementById('eff');
   const complEl = document.getElementById('compl');
+
+  const outEl = document.getElementById('out');
+  const answerEl = document.getElementById('answer');
+
   const outEl = document.ge
   const chartCanvas = document.getElementById('metric-chart');
   const chartCtx = chartCanvas ? chartCanvas.getContext('2d') : null;
@@ -54,6 +58,7 @@ async function boot() {
 
   const LANGUAGE_PREFIX = 'Kolibri запомнил:';
   const LANGUAGE_DEFAULT_MESSAGE = 'Колибри пока молчит...';
+
 
 
   const sendBtn = document.getElementById('send');
@@ -101,9 +106,13 @@ async function boot() {
     refreshHud();
     refreshTail();
 
+    refreshAnswer();
+
+
     refreshInsights();
 
     refreshLanguageSummary();
+
 
 
   });
@@ -113,9 +122,13 @@ async function boot() {
     refreshHud();
     refreshTail();
 
+    refreshAnswer();
+
+
     refreshInsights();
 
     refreshLanguageSummary();
+
 
   });
 
@@ -353,8 +366,18 @@ async function boot() {
     refreshMemory();
   }
 
+  function refreshAnswer() {
+    const cap = 4096;
+    const ptr = wasm.kol_alloc(cap);
+    const len = wasm.kol_emit_text(ptr, cap);
+    const text = len > 0 ? readString(instance, ptr, len) : '';
+    wasm.kol_free(ptr);
+    answerEl.textContent = text;
+  }
+
   refreshHud();
   refreshTail();
+  refreshAnswer();
 
   refreshInsights();
 
