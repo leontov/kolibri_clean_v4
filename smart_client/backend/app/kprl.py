@@ -108,5 +108,8 @@ class KPRLManager:
                         )
         return {"ok": not issues, "issues": issues}
 
+    def reset(self) -> None:
+        self.path.write_text("", encoding="utf-8")
+
 
 kprl_manager = KPRLManager()
