@@ -318,6 +318,28 @@ def test_planner_aligns_steps_with_skills(skill_store: SkillStore) -> None:
     assert hierarchical.assignments
 
 
+def test_planner_respects_hint_sequences() -> None:
+    manifests = [
+        SkillManifest.from_dict(
+            {
+                "name": name,
+                "version": "0.1.0",
+                "inputs": ["text"],
+                "permissions": ["net.read:whitelist"],
+                "billing": "per_call",
+                "policy": {},
+                "entry": f"{name}.py",
+            }
+        )
+        for name in ("researcher", "writer", "reviewer")
+    ]
+    planner = NeuroSemanticPlanner({manifest.name: manifest for manifest in manifests})
+    plan = planner.plan("Prepare investor update", hints=["researcher -> writer -> reviewer"])
+    assert [step.skill for step in plan.steps] == ["researcher", "writer", "reviewer"]
+    assert plan.steps[1].dependencies == ("step-1",)
+    assert plan.steps[2].dependencies == ("step-2",)
+
+
 def test_offline_cache_eviction() -> None:
     clock = datetime(2025, 1, 1, 12, 0, 0)
 
@@ -523,6 +545,30 @@ def test_runtime_orchestrator_end_to_end(
     assert "slo_snapshot" in journal_events
     all_events = [entry.event for entry in runtime.journal.entries()]
     assert "self_learning" in all_events
+
+
+def test_runtime_plan_reuse_and_replay(
+    knowledge_graph: KnowledgeGraph, skill_store: SkillStore
+) -> None:
+    runtime = _bootstrap_runtime(knowledge_graph, skill_store)
+    request = RuntimeRequest(
+        user_id="user-1",
+        goal="Draft an investor pitch deck",
+        modalities={"text": "Need a compelling narrative for Kolibri-x."},
+        hints=["writer"],
+        skill_scopes=["net.read:whitelist"],
+    )
+    runtime.process(request)
+    history = runtime.plan_journal()
+    assert history and history[0].goal == request.goal
+    assert history[0].usage_count == 1
+    replay_payload = runtime.replay_plan(request.goal, request.hints)
+    assert replay_payload is not None
+    assert replay_payload["plan"]["goal"] == request.goal
+    runtime.cache = None
+    runtime.process(request)
+    updated_history = runtime.plan_journal()
+    assert updated_history[0].usage_count >= 2
 
 
 def test_skill_policy_violation_blocks_execution(
