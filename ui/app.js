@@ -30,6 +30,7 @@ async function boot() {
   const effEl = document.getElementById('eff');
   const complEl = document.getElementById('compl');
   const outEl = document.getElementById('out');
+  const answerEl = document.getElementById('answer');
 
   document.getElementById('send').addEventListener('click', () => {
     const txt = msgEl.value.trim();
@@ -39,12 +40,15 @@ async function boot() {
     wasm.kol_free(ptr);
     msgEl.value = '';
     refreshHud();
+    refreshTail();
+    refreshAnswer();
   });
 
   document.getElementById('tick').addEventListener('click', () => {
     wasm.kol_tick();
     refreshHud();
     refreshTail();
+    refreshAnswer();
   });
 
   function refreshHud() {
@@ -61,8 +65,18 @@ async function boot() {
     outEl.textContent = json;
   }
 
+  function refreshAnswer() {
+    const cap = 4096;
+    const ptr = wasm.kol_alloc(cap);
+    const len = wasm.kol_emit_text(ptr, cap);
+    const text = len > 0 ? readString(instance, ptr, len) : '';
+    wasm.kol_free(ptr);
+    answerEl.textContent = text;
+  }
+
   refreshHud();
   refreshTail();
+  refreshAnswer();
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./pwa/sw.js').catch(() => {});
