@@ -2,12 +2,18 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
+from kolibri_x.runtime.journal import ActionJournal
+
 MANDATORY_FIELDS = {"name", "version", "inputs", "permissions", "billing", "policy", "entry"}
+
+VERSION_PATTERN = re.compile(r"^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$")
+PERMISSION_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]*\.[a-z][a-z0-9_.-]*:[a-z0-9_.-]+$")
 
 
 class SkillPolicyViolation(RuntimeError):
@@ -28,6 +34,10 @@ class SkillPolicyViolation(RuntimeError):
         self.details = dict(details or {})
 
 
+class SkillManifestValidationError(ValueError):
+    """Raised when a manifest fails schema validation."""
+
+
 @dataclass(frozen=True)
 class SkillManifest:
     name: str
@@ -38,20 +48,40 @@ class SkillManifest:
     policy: Mapping[str, str]
     entry: str
 
+    def validate(self) -> None:
+        """Validate the manifest fields against schema rules."""
+
+        self._validate_name(self.name)
+        self._validate_version(self.version)
+        self._validate_sequence(self.inputs, "inputs")
+        self._validate_permissions(self.permissions)
+        self._validate_entry(self.entry)
+        self._validate_policy(self.policy)
+
     @classmethod
     def from_dict(cls, data: Mapping[str, object]) -> "SkillManifest":
         missing = MANDATORY_FIELDS - data.keys()
         if missing:
-            raise ValueError(f"missing manifest fields: {sorted(missing)}")
-        return cls(
-            name=str(data["name"]),
-            version=str(data["version"]),
-            inputs=tuple(data.get("inputs", [])),
-            permissions=tuple(data.get("permissions", [])),
-            billing=str(data.get("billing", "per_call")),
-            policy=dict(data.get("policy", {})),
-            entry=str(data["entry"]),
+            raise SkillManifestValidationError(f"missing manifest fields: {sorted(missing)}")
+        name = str(data["name"])
+        version = str(data["version"])
+        inputs = cls._coerce_sequence(data.get("inputs", []), "inputs")
+        permissions = cls._coerce_sequence(data.get("permissions", []), "permissions")
+        billing = str(data.get("billing", "per_call"))
+        policy = cls._coerce_policy(data.get("policy", {}))
+        entry = str(data["entry"])
+
+        manifest = cls(
+            name=name,
+            version=version,
+            inputs=tuple(inputs),
+            permissions=tuple(permissions),
+            billing=billing,
+            policy=policy,
+            entry=entry,
         )
+        manifest.validate()
+        return manifest
 
     def to_dict(self) -> Mapping[str, object]:
         return {
@@ -63,6 +93,75 @@ class SkillManifest:
             "policy": dict(self.policy),
             "entry": self.entry,
         }
+
+    @staticmethod
+    def _validate_name(name: str) -> None:
+        if not name or not name.strip():
+            raise SkillManifestValidationError("manifest name must be a non-empty string")
+
+    @staticmethod
+    def _validate_version(version: str) -> None:
+        if not VERSION_PATTERN.match(version):
+            raise SkillManifestValidationError(f"invalid manifest version '{version}'")
+
+    @staticmethod
+    def _validate_sequence(values: Sequence[object], field: str) -> None:
+        for item in values:
+            if not isinstance(item, str) or not item.strip():
+                raise SkillManifestValidationError(f"{field} entries must be non-empty strings")
+
+    @classmethod
+    def _validate_permissions(cls, permissions: Sequence[str]) -> None:
+        cls._validate_sequence(permissions, "permissions")
+        for permission in permissions:
+            if not PERMISSION_PATTERN.match(permission):
+                raise SkillManifestValidationError(f"invalid permission format: '{permission}'")
+
+    @staticmethod
+    def _validate_entry(entry: str) -> None:
+        candidate = Path(entry)
+        if not entry or not entry.strip():
+            raise SkillManifestValidationError("entry must be a non-empty string")
+        if candidate.is_absolute():
+            raise SkillManifestValidationError("entry must be a relative path")
+        if any(part == ".." for part in candidate.parts):
+            raise SkillManifestValidationError("entry cannot traverse directories")
+        if candidate.suffix != ".py":
+            raise SkillManifestValidationError("entry must reference a Python module (.py)")
+
+    @staticmethod
+    def _validate_policy(policy: Mapping[str, str]) -> None:
+        for key, value in policy.items():
+            if not isinstance(key, str) or not key.strip():
+                raise SkillManifestValidationError("policy keys must be non-empty strings")
+            if not isinstance(value, str) or not value.strip():
+                raise SkillManifestValidationError("policy values must be non-empty strings")
+
+    @staticmethod
+    def _coerce_sequence(value: object, field: str) -> List[str]:
+        if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
+            items: List[str] = []
+            for item in value:
+                if not isinstance(item, str):
+                    item = str(item)
+                items.append(item)
+            SkillManifest._validate_sequence(items, field)
+            return items
+        raise SkillManifestValidationError(f"{field} must be a sequence of strings")
+
+    @staticmethod
+    def _coerce_policy(value: object) -> Mapping[str, str]:
+        if isinstance(value, Mapping):
+            policy: Dict[str, str] = {}
+            for key, val in value.items():
+                if not isinstance(key, str):
+                    key = str(key)
+                if not isinstance(val, str):
+                    val = str(val)
+                policy[key] = val
+            SkillManifest._validate_policy(policy)
+            return policy
+        raise SkillManifestValidationError("policy must be a mapping of string keys to string values")
 
 
 @dataclass(frozen=True)
@@ -87,11 +186,23 @@ class SkillAuditRecord:
 
 
 class SkillStore:
-    def __init__(self) -> None:
+    def __init__(self, *, journal: Optional[ActionJournal] = None) -> None:
         self._skills: Dict[str, SkillManifest] = {}
         self._audit_log: List[SkillAuditRecord] = []
+        self.journal = journal or ActionJournal()
 
     def register(self, manifest: SkillManifest) -> None:
+        try:
+            manifest.validate()
+        except SkillManifestValidationError as exc:
+            self.journal.append(
+                "skill_manifest.rejected",
+                {
+                    "skill": getattr(manifest, "name", "<unknown>"),
+                    "reason": str(exc),
+                },
+            )
+            raise
         self._skills[manifest.name] = manifest
 
     def register_many(self, manifests: Iterable[SkillManifest]) -> None:
@@ -176,4 +287,4 @@ class SkillStore:
             return SkillManifest.from_dict(json.load(handle))
 
 
-__all__ = ["SkillManifest", "SkillPolicyViolation", "SkillStore"]
+__all__ = ["SkillManifest", "SkillManifestValidationError", "SkillPolicyViolation", "SkillStore"]
