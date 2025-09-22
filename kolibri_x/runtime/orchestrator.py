@@ -31,6 +31,7 @@ from kolibri_x.runtime.cache import OfflineCache, RAGCache
 from kolibri_x.runtime.iot import IoTBridge, IoTCommand
 from kolibri_x.runtime.journal import ActionJournal, JournalEntry
 from kolibri_x.runtime.metrics import SLOTracker
+from kolibri_x.runtime.mksi import RuntimeMksiAggregator
 from kolibri_x.runtime.self_learning import BackgroundSelfLearner
 from kolibri_x.runtime.workflow import ReminderEvent, ReminderRule, Workflow, WorkflowManager
 from kolibri_x.skills.store import SkillPolicyViolation, SkillStore
@@ -108,6 +109,7 @@ class RuntimeResponse:
     journal_tail: Sequence[JournalEntry]
     cached: bool = False
     metrics: Mapping[str, Mapping[str, float]] = field(default_factory=dict)
+    mksi: Mapping[str, Mapping[str, float]] = field(default_factory=dict)
 
 
 class KolibriRuntime:
@@ -135,6 +137,12 @@ class KolibriRuntime:
         cache: Optional[OfflineCache] = None,
         journal: Optional[ActionJournal] = None,
         metrics: Optional[SLOTracker] = None,
+        mksi: Optional[RuntimeMksiAggregator] = None,
+        mksi_window: int = 20,
+        mksi_latency_budget_ms: float = 2500.0,
+        mksi_slo_targets: Optional[Mapping[str, float]] = None,
+        mksi_export_file: Optional[str] = None,
+        mksi_http_endpoint: Optional[str] = None,
         iot_bridge: Optional[IoTBridge] = None,
         workflow_manager: Optional[WorkflowManager] = None,
         self_learner: Optional[BackgroundSelfLearner] = None,
@@ -161,6 +169,16 @@ class KolibriRuntime:
         self.cache = cache
         self.journal = journal or ActionJournal()
         self.metrics = metrics or SLOTracker()
+        if mksi is not None:
+            self.mksi = mksi
+        else:
+            self.mksi = RuntimeMksiAggregator(
+                window=mksi_window,
+                slo_targets=mksi_slo_targets,
+                latency_budget_ms=mksi_latency_budget_ms,
+                export_file=mksi_export_file,
+                export_endpoint=mksi_http_endpoint,
+            )
         self.iot_bridge = iot_bridge
         self.workflow_manager = workflow_manager or WorkflowManager()
         self.ingestor = knowledge_ingestor or KnowledgeIngestor()
@@ -206,15 +224,27 @@ class KolibriRuntime:
             executions = [SkillExecution.from_dict(data) for data in cached_payload.get("executions", [])]
             metrics_snapshot = self.metrics.report()
             self.journal.append("slo_snapshot", {"stages": metrics_snapshot})
+            cached_adjustments = dict(cached_payload.get("adjustments", {}))
+            mksi_snapshot = self.mksi.observe(
+                modalities=list(filtered_modalities.keys()),
+                plan_steps=len(plan.steps),
+                executions=executions,
+                reasoning_steps=len(reasoning.steps()),
+                adjustments=cached_adjustments,
+                cached=True,
+                slo_snapshot=metrics_snapshot,
+            )
+            self.journal.append("mksi_snapshot", mksi_snapshot.as_dict())
             return RuntimeResponse(
                 plan=plan,
                 answer=dict(cached_payload.get("answer", {})),
-                adjustments=dict(cached_payload.get("adjustments", {})),
+                adjustments=cached_adjustments,
                 executions=executions,
                 reasoning=reasoning,
                 journal_tail=self.journal.tail(),
                 cached=True,
                 metrics=metrics_snapshot,
+                mksi=mksi_snapshot.as_dict(),
             )
 
         with self.metrics.time_stage("planning"):
@@ -301,6 +331,16 @@ class KolibriRuntime:
 
         metrics_snapshot = self.metrics.report()
         self.journal.append("slo_snapshot", {"stages": metrics_snapshot})
+        mksi_snapshot = self.mksi.observe(
+            modalities=list(filtered_modalities.keys()),
+            plan_steps=len(plan.steps),
+            executions=executions,
+            reasoning_steps=len(reasoning.steps()),
+            adjustments=adjustments,
+            cached=False,
+            slo_snapshot=metrics_snapshot,
+        )
+        self.journal.append("mksi_snapshot", mksi_snapshot.as_dict())
         return RuntimeResponse(
             plan=plan,
             answer=answer,
@@ -310,6 +350,7 @@ class KolibriRuntime:
             journal_tail=self.journal.tail(),
             cached=False,
             metrics=metrics_snapshot,
+            mksi=mksi_snapshot.as_dict(),
         )
 
     def _background_learn(
