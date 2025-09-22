@@ -59,6 +59,7 @@ async function boot() {
     const json = readString(instance, ptr, len > 0 ? len : 0);
     wasm.kol_free(ptr);
     outEl.textContent = json;
+    updateSlo(json);
   }
 
   refreshHud();
@@ -70,3 +71,66 @@ async function boot() {
 }
 
 boot();
+
+function updateSlo(json) {
+  let events = [];
+  try {
+    events = JSON.parse(json);
+  } catch (_) {
+    // ignore malformed json from wasm tail
+  }
+  const sloEl = document.getElementById('slo');
+  if (!sloEl) return;
+  if (!Array.isArray(events)) {
+    sloEl.textContent = 'нет данных';
+    return;
+  }
+  const latest = [...events].reverse().find((entry) => entry && entry.event === 'slo_report');
+  if (!latest || !latest.payload) {
+    sloEl.textContent = 'нет данных';
+    return;
+  }
+  let report = latest.payload;
+  if (typeof report === 'string') {
+    try {
+      report = JSON.parse(report);
+    } catch (_) {
+      // keep as string
+    }
+  }
+  if (report && report.json && typeof report.json === 'string') {
+    try {
+      report = JSON.parse(report.json);
+    } catch (_) {
+      // fallback to payload
+    }
+  }
+  if (!report || typeof report !== 'object') {
+    sloEl.textContent = 'нет данных';
+    return;
+  }
+  const stages = report.stages || {};
+  const lines = [];
+  Object.keys(stages)
+    .sort()
+    .forEach((stage) => {
+      const snapshot = stages[stage] || {};
+      const p95 = Number(snapshot.p95 || 0).toFixed(1);
+      const count = Math.trunc(Number(snapshot.count || 0));
+      lines.push(`${stage}: p95=${p95}мс, n=${count}`);
+    });
+  const breaches = report.breaches || {};
+  const breachKeys = Object.keys(breaches);
+  if (breachKeys.length) {
+    lines.push('⚠️ Нарушения SLA:');
+    breachKeys
+      .sort()
+      .forEach((stage) => {
+        const info = breaches[stage] || {};
+        const actual = Number(info.p95 || 0).toFixed(1);
+        const limit = Number(info.limit || 0).toFixed(1);
+        lines.push(`- ${stage}: ${actual}мс > ${limit}мс`);
+      });
+  }
+  sloEl.textContent = lines.length ? lines.join('\n') : 'нет данных';
+}

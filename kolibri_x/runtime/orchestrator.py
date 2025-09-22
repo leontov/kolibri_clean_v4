@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import sys
 from collections.abc import Iterable as IterableABC
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -35,6 +36,21 @@ from kolibri_x.runtime.self_learning import BackgroundSelfLearner
 from kolibri_x.runtime.workflow import ReminderEvent, ReminderRule, Workflow, WorkflowManager
 from kolibri_x.skills.store import SkillPolicyViolation, SkillStore
 from kolibri_x.xai.reasoning import ReasoningLog
+
+
+DEFAULT_SLO_THRESHOLDS: Mapping[str, float] = {
+    "privacy_enforce": 120.0,
+    "compose_transcript": 60.0,
+    "encode_modalities": 220.0,
+    "fusion": 180.0,
+    "offline_cache_lookup": 75.0,
+    "planning": 320.0,
+    "rag_cache_lookup": 120.0,
+    "rag_answer": 450.0,
+    "execute_plan": 400.0,
+    "profile_signals": 150.0,
+    "empathy_modulation": 150.0,
+}
 
 
 SkillExecutor = Callable[[Mapping[str, object]], Mapping[str, object]]
@@ -160,7 +176,7 @@ class KolibriRuntime:
         self.empathy = empathy or EmpathyModulator()
         self.cache = cache
         self.journal = journal or ActionJournal()
-        self.metrics = metrics or SLOTracker()
+        self.metrics = metrics or SLOTracker(thresholds=DEFAULT_SLO_THRESHOLDS)
         self.iot_bridge = iot_bridge
         self.workflow_manager = workflow_manager or WorkflowManager()
         self.ingestor = knowledge_ingestor or KnowledgeIngestor()
@@ -205,7 +221,7 @@ class KolibriRuntime:
             self.journal.append("cache_hit", {"user_id": request.user_id, "goal": request.goal})
             executions = [SkillExecution.from_dict(data) for data in cached_payload.get("executions", [])]
             metrics_snapshot = self.metrics.report()
-            self.journal.append("slo_snapshot", {"stages": metrics_snapshot})
+            metrics_snapshot = self._record_slo_report()
             return RuntimeResponse(
                 plan=plan,
                 answer=dict(cached_payload.get("answer", {})),
@@ -299,8 +315,7 @@ class KolibriRuntime:
             self.cache.put(cache_key, payload)
             self.journal.append("cache_store", {"key": cache_key, "user_id": request.user_id})
 
-        metrics_snapshot = self.metrics.report()
-        self.journal.append("slo_snapshot", {"stages": metrics_snapshot})
+        metrics_snapshot = self._record_slo_report()
         return RuntimeResponse(
             plan=plan,
             answer=answer,
@@ -381,8 +396,34 @@ class KolibriRuntime:
                 "action": command.action,
                 "status": acknowledgement.get("status"),
             },
-        )
+            )
         return acknowledgement
+
+    def _record_slo_report(self) -> Mapping[str, Mapping[str, float]]:
+        report_payload = self.metrics.build_report()
+        alerts = self._emit_slo_alerts(report_payload)
+        payload = dict(report_payload)
+        payload["json"] = self.metrics.export_json()
+        if alerts:
+            payload["alerts"] = list(alerts)
+        self.journal.append("slo_report", payload)
+        stages = report_payload.get("stages", {})
+        return {key: dict(value) for key, value in stages.items()} if isinstance(stages, Mapping) else {}
+
+    def _emit_slo_alerts(self, report: Mapping[str, object]) -> Sequence[str]:
+        breaches = report.get("breaches")
+        if not isinstance(breaches, Mapping):
+            return ()
+        alerts = []
+        for stage, data in breaches.items():
+            if not isinstance(data, Mapping):
+                continue
+            actual = float(data.get("p95", 0.0))
+            limit = float(data.get("limit", 0.0))
+            message = f"[slo] stage {stage} exceeded p95 {actual:.2f}ms > {limit:.2f}ms"
+            print(message, file=sys.stderr)
+            alerts.append(message)
+        return tuple(alerts)
 
     def ingest_document(self, document: KnowledgeDocument) -> IngestionReport:
         """Adds a document to the knowledge graph via the ingestor."""

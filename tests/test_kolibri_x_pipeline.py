@@ -520,7 +520,7 @@ def test_runtime_orchestrator_end_to_end(
     assert cached_response.answer == response.answer
     assert cached_response.executions[0].output == response.executions[0].output
     journal_events = [entry.event for entry in runtime.journal.tail(5)]
-    assert "slo_snapshot" in journal_events
+    assert "slo_report" in journal_events
     all_events = [entry.event for entry in runtime.journal.entries()]
     assert "self_learning" in all_events
 

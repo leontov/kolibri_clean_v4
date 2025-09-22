@@ -88,6 +88,7 @@ class ChatSession:
             parts.append("Kolibri не вернула краткое описание ответа.")
 
         parts.extend(self._format_executions(response.executions))
+        parts.extend(self._format_slo(response.metrics))
         parts.extend(self._format_journal(self.runtime.journal.tail(self.journal_tail)))
         return "\n".join(parts)
 
@@ -112,6 +113,26 @@ class ChatSession:
         lines = ["Шаги навыков:"]
         for execution in executions:
             lines.append(self._describe_execution(execution))
+        return lines
+
+    def _format_slo(self, metrics: Mapping[str, Mapping[str, float]]) -> List[str]:
+        if not metrics:
+            return ["SLO: метрики пока не собраны."]
+        lines = ["SLO (p95, count):"]
+        for stage in sorted(metrics):
+            snapshot = metrics[stage]
+            p95 = float(snapshot.get("p95", 0.0))
+            count = int(snapshot.get("count", 0))
+            lines.append(f"- {stage}: p95={p95:.1f} мс, n={count}")
+        slo_report = json.loads(self.runtime.metrics.export_json())
+        breaches = slo_report.get("breaches", {}) if isinstance(slo_report, Mapping) else {}
+        if breaches:
+            lines.append("⚠️ Нарушения SLA:")
+            for stage in sorted(breaches):
+                info = breaches[stage]
+                actual = float(info.get("p95", 0.0))
+                limit = float(info.get("limit", 0.0))
+                lines.append(f"  - {stage}: {actual:.1f} мс > лимита {limit:.1f} мс")
         return lines
 
     def _describe_execution(self, execution: SkillExecution) -> str:
