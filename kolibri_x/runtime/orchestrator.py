@@ -4,6 +4,8 @@ from __future__ import annotations
 import hashlib
 import json
 
+import logging
+
 import multiprocessing
 from multiprocessing.connection import Connection
 import traceback
@@ -12,6 +14,7 @@ import traceback
 from pathlib import Path
 
 import time
+
 
 
 from collections.abc import Iterable as IterableABC
@@ -41,20 +44,27 @@ from kolibri_x.kg.graph import KnowledgeGraph
 from kolibri_x.kg.ingest import IngestionReport, KnowledgeDocument, KnowledgeIngestor
 from kolibri_x.kg.rag import RAGPipeline
 from kolibri_x.personalization import EmpathyContext, EmpathyModulator, InteractionSignal, OnDeviceProfiler
-from kolibri_x.privacy.consent import PrivacyOperator
+from kolibri_x.privacy.consent import PolicyLayer, PrivacyOperator
 from kolibri_x.runtime.cache import OfflineCache, RAGCache
 from kolibri_x.runtime.iot import IoTBridge, IoTCommand
 from kolibri_x.runtime.journal import ActionJournal, JournalEntry
 from kolibri_x.runtime.metrics import SLOTracker
 from kolibri_x.runtime.self_learning import BackgroundSelfLearner
 from kolibri_x.runtime.workflow import ReminderEvent, ReminderRule, Workflow, WorkflowManager
+
+from kolibri_x.skills.store import SkillManifest, SkillPolicyViolation, SkillStore
+
 from kolibri_x.skills.store import (
     SkillPolicyViolation,
     SkillQuota,
     SkillQuotaExceeded,
     SkillStore,
 )
+
 from kolibri_x.xai.reasoning import ReasoningLog
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 SkillExecutor = Callable[[Mapping[str, object]], Mapping[str, object]]
@@ -414,12 +424,18 @@ class KolibriRuntime:
         self.fusion_budget = fusion_budget
         self.planner = planner or NeuroSemanticPlanner()
         self.skill_store = skill_store or SkillStore()
+
+        manifests_dir = Path(__file__).resolve().parents[1] / "skills" / "manifests"
+        self.skill_store.load_directory(manifests_dir)
+        self.sandbox = sandbox or SkillSandbox()
+
         self.journal = journal or ActionJournal()
         if sandbox is None:
             self.sandbox = SkillSandbox(journal=self.journal)
         else:
             self.sandbox = sandbox
             self.sandbox.bind_journal(self.journal)
+
         self.privacy = privacy or PrivacyOperator()
         self.profiler = profiler or OnDeviceProfiler()
         self.empathy = empathy or EmpathyModulator()
@@ -454,6 +470,8 @@ class KolibriRuntime:
 
         self._active_session_id: Optional[str] = None
         self._graph_store_path: Optional[Path] = None
+
+        self._initialize_skills_from_metadata()
 
         skills = self.skill_store.list()
         if skills:
@@ -534,6 +552,30 @@ class KolibriRuntime:
 
     def __exit__(self, exc_type, exc, tb) -> None:
         self.shutdown()
+
+    def _initialize_skills_from_metadata(self) -> None:
+        registered = set(self.sandbox.registered())
+        for manifest in self.skill_store.list():
+            if manifest.name not in registered:
+                self.sandbox.register(manifest.name, self._metadata_placeholder(manifest))
+                registered.add(manifest.name)
+                LOGGER.debug("registered placeholder executor for %s", manifest.name)
+            if manifest.inputs:
+                layer = PolicyLayer(name=f"skill:{manifest.name}", scope=set(manifest.inputs))
+                self.privacy.register_layer(layer)
+
+    @staticmethod
+    def _metadata_placeholder(manifest: SkillManifest) -> SkillExecutor:
+        def executor(payload: Mapping[str, object]) -> Mapping[str, object]:
+            return {
+                "status": "not_implemented",
+                "skill": manifest.name,
+                "version": manifest.version,
+                "entry": manifest.entry,
+                "requested": dict(payload),
+            }
+
+        return executor
 
     def process(self, request: RuntimeRequest) -> RuntimeResponse:
         reasoning = ReasoningLog()
