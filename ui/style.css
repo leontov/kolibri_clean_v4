@@ -57,6 +57,30 @@ button:hover {
   transform: translateY(-1px);
 }
 
+.history {
+  margin-top: 1rem;
+}
+
+#history {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+#history li {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  word-break: break-word;
+  font-size: 0.9rem;
+}
+
 pre {
   max-height: 320px;
   overflow: auto;
