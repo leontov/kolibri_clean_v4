@@ -31,6 +31,7 @@ from kolibri_x.runtime.cache import OfflineCache, RAGCache
 from kolibri_x.runtime.iot import IoTBridge, IoTCommand
 from kolibri_x.runtime.journal import ActionJournal, JournalEntry
 from kolibri_x.runtime.metrics import SLOTracker
+from kolibri_x.runtime.self_learning import BackgroundSelfLearner
 from kolibri_x.runtime.workflow import ReminderEvent, ReminderRule, Workflow, WorkflowManager
 from kolibri_x.skills.store import SkillPolicyViolation, SkillStore
 from kolibri_x.xai.reasoning import ReasoningLog
@@ -136,6 +137,7 @@ class KolibriRuntime:
         metrics: Optional[SLOTracker] = None,
         iot_bridge: Optional[IoTBridge] = None,
         workflow_manager: Optional[WorkflowManager] = None,
+        self_learner: Optional[BackgroundSelfLearner] = None,
         knowledge_ingestor: Optional[KnowledgeIngestor] = None,
         sensor_hub: Optional[SensorHub] = None,
         alignment_engine: Optional[TemporalAlignmentEngine] = None,
@@ -166,6 +168,7 @@ class KolibriRuntime:
         self.rag_cache = rag_cache or RAGCache()
         self.sensor_hub = sensor_hub or SensorHub()
         self.alignment_engine = alignment_engine or TemporalAlignmentEngine()
+        self.self_learner = self_learner
 
         skills = self.skill_store.list()
         if skills:
@@ -290,6 +293,8 @@ class KolibriRuntime:
             "executions": [execution.to_dict() for execution in executions],
             "adjustments": dict(adjustments),
         }
+        if self.self_learner:
+            self._background_learn(request, answer, executions)
         if self.cache:
             self.cache.put(cache_key, payload)
             self.journal.append("cache_store", {"key": cache_key, "user_id": request.user_id})
@@ -306,6 +311,55 @@ class KolibriRuntime:
             cached=False,
             metrics=metrics_snapshot,
         )
+
+    def _background_learn(
+        self,
+        request: RuntimeRequest,
+        answer: Mapping[str, object],
+        executions: Sequence[SkillExecution],
+    ) -> None:
+        if not self.self_learner:
+            return
+        verification = answer.get("verification", {}) if isinstance(answer, Mapping) else {}
+        confidence_obj = verification.get("confidence") if isinstance(verification, Mapping) else None
+        base_confidence = 0.5
+        if isinstance(confidence_obj, (int, float)):
+            base_confidence = float(confidence_obj)
+        base_confidence = max(0.0, min(base_confidence, 1.0))
+
+        for execution in executions:
+            skill = execution.skill or execution.step_id
+            if not skill:
+                continue
+            status = str(execution.output.get("status", "unknown"))
+            gradients: Dict[str, float] = {
+                "success": 1.0 if status == "ok" else 0.0,
+                "penalty": 1.0 if status not in {"ok", "skipped"} else 0.0,
+            }
+            if status == "policy_blocked":
+                gradients["policy"] = 1.0
+            if status == "error":
+                gradients["errors"] = 1.0
+            self.self_learner.enqueue(
+                skill,
+                gradients,
+                confidence=base_confidence,
+                metadata={
+                    "goal": request.goal,
+                    "status": status,
+                    "step_id": execution.step_id,
+                },
+                user_id=request.user_id,
+            )
+        updates = self.self_learner.step()
+        if updates:
+            self.journal.append(
+                "self_learning",
+                {
+                    "tasks": sorted(updates.keys()),
+                    "weights": {task: dict(weights) for task, weights in updates.items()},
+                },
+            )
 
     def dispatch_iot_command(
         self,
