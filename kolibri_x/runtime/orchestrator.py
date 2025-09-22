@@ -5,7 +5,7 @@ import hashlib
 import json
 from collections.abc import Iterable as IterableABC
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 from kolibri_x.core.encoders import (
@@ -169,6 +169,8 @@ class KolibriRuntime:
         self.sensor_hub = sensor_hub or SensorHub()
         self.alignment_engine = alignment_engine or TemporalAlignmentEngine()
         self.self_learner = self_learner
+        self._degradation_alerts: Dict[str, float] = {}
+        self._pending_example_requests: List[Mapping[str, object]] = []
 
         skills = self.skill_store.list()
         if skills:
@@ -176,6 +178,8 @@ class KolibriRuntime:
 
         if self.iot_bridge and self.iot_bridge.journal is None:
             self.iot_bridge.journal = self.journal
+        if self.self_learner:
+            self.self_learner.bind_journal(self.journal)
 
     def process(self, request: RuntimeRequest) -> RuntimeResponse:
         reasoning = ReasoningLog()
@@ -352,14 +356,109 @@ class KolibriRuntime:
                 user_id=request.user_id,
             )
         updates = self.self_learner.step()
-        if updates:
+        self._handle_degradation(updates)
+
+    def _handle_degradation(self, updates: Mapping[str, Mapping[str, float]]) -> None:
+        if not self.self_learner:
+            return
+        degraded = self.self_learner.degraded_tasks()
+        if not degraded:
+            return
+        recent_samples = self.self_learner.recent_samples(10)
+        timestamp = datetime.now(timezone.utc).isoformat()
+        for task_id, drift_score in degraded.items():
+            previous = self._degradation_alerts.get(task_id, 0.0)
+            if drift_score <= previous:
+                continue
+            self._degradation_alerts[task_id] = drift_score
+            summaries: List[Mapping[str, object]] = []
+            for sample in recent_samples:
+                if sample.task_id != task_id:
+                    continue
+                summaries.append(
+                    {
+                        "status": sample.metadata.get("status"),
+                        "confidence": sample.confidence,
+                        "user_id": sample.user_id,
+                        "timestamp": sample.timestamp.isoformat(),
+                    }
+                )
+                if len(summaries) >= 3:
+                    break
+            request_payload = {
+                "task": task_id,
+                "drift": drift_score,
+                "threshold": self.self_learner.drift_threshold,
+                "requested_at": timestamp,
+                "recent_samples": summaries,
+                "last_update": dict(updates.get(task_id, {})),
+            }
+            self._pending_example_requests = [
+                req for req in self._pending_example_requests if req.get("task") != task_id
+            ]
+            self._pending_example_requests.append(request_payload)
+            self.journal.append("self_learning_degradation", request_payload)
+
+    def _resolve_degradation(self, task_id: str) -> None:
+        if task_id in self._degradation_alerts:
+            del self._degradation_alerts[task_id]
+        self._pending_example_requests = [
+            req for req in self._pending_example_requests if req.get("task") != task_id
+        ]
+
+    def upload_counterexamples(
+        self,
+        task_id: str,
+        examples: Sequence[Mapping[str, object]],
+        *,
+        confidence: float = 0.15,
+    ) -> None:
+        """Loads counterexamples supplied by human reviewers into the learner."""
+
+        if not self.self_learner:
+            return
+        ingested = 0
+        for example in examples:
+            gradients = example.get("gradients") if isinstance(example, Mapping) else None
+            metadata = dict(example.get("metadata", {})) if isinstance(example, Mapping) else {}
+            status = str(example.get("status", "counterexample")) if isinstance(example, Mapping) else "counterexample"
+            if not gradients:
+                gradients = {"success": 0.0, "penalty": 1.0}
+            metadata.setdefault("source", "counterexample")
+            metadata["status"] = status
+            user_id = str(example.get("user_id", "annotator")) if isinstance(example, Mapping) else "annotator"
+            sample_confidence = float(example.get("confidence", confidence)) if isinstance(example, Mapping) else confidence
+            self.self_learner.enqueue(
+                task_id,
+                gradients,
+                confidence=sample_confidence,
+                metadata=metadata,
+                user_id=user_id,
+            )
+            ingested += 1
+        if ingested:
+            updates = self.self_learner.step()
+            self._resolve_degradation(task_id)
+            self._handle_degradation(updates)
             self.journal.append(
-                "self_learning",
+                "self_learning_counterexamples",
                 {
-                    "tasks": sorted(updates.keys()),
-                    "weights": {task: dict(weights) for task, weights in updates.items()},
+                    "task": task_id,
+                    "count": ingested,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "updates": {task: dict(weights) for task, weights in updates.items()},
                 },
             )
+
+    def pending_example_requests(self) -> Sequence[Mapping[str, object]]:
+        """Returns outstanding active learning requests triggered by drift."""
+
+        return tuple(dict(request) for request in self._pending_example_requests)
+
+    def degradation_state(self) -> Mapping[str, float]:
+        """Current view of drift levels per task that breached the threshold."""
+
+        return dict(self._degradation_alerts)
 
     def dispatch_iot_command(
         self,

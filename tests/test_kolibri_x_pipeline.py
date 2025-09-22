@@ -49,7 +49,12 @@ from kolibri_x.privacy.consent import AccessProof, PolicyLayer, PrivacyOperator 
 from kolibri_x.runtime.cache import OfflineCache  # noqa: E402
 from kolibri_x.runtime.iot import IoTBridge, IoTCommand, IoTPolicy  # noqa: E402
 from kolibri_x.runtime.journal import ActionJournal  # noqa: E402
-from kolibri_x.runtime.orchestrator import KolibriRuntime, RuntimeRequest, SkillSandbox  # noqa: E402
+from kolibri_x.runtime.orchestrator import (
+    KolibriRuntime,
+    RuntimeRequest,
+    SkillExecution,
+    SkillSandbox,
+)  # noqa: E402
 from kolibri_x.runtime.self_learning import BackgroundSelfLearner  # noqa: E402
 from kolibri_x.runtime.workflow import ReminderRule, WorkflowManager  # noqa: E402
 from kolibri_x.skills.store import SkillManifest, SkillPolicyViolation, SkillStore  # noqa: E402
@@ -400,6 +405,28 @@ def test_background_self_learning_accumulates_updates() -> None:
     assert history and history[-1]["updates"].get("writer")
 
 
+def test_background_self_learning_drift_reporting() -> None:
+    journal = ActionJournal()
+    learner = BackgroundSelfLearner(journal=journal, drift_alpha=1.0, drift_threshold=0.5)
+    learner.enqueue(
+        "writer",
+        {"success": 1.0, "penalty": 0.0},
+        confidence=0.2,
+        metadata={"status": "ok"},
+    )
+    learner.enqueue(
+        "writer",
+        {"success": 0.0, "penalty": 1.0},
+        confidence=0.9,
+        metadata={"status": "error"},
+    )
+    learner.step()
+    drift = learner.drift_scores()
+    assert drift["writer"] > 0.0
+    events = [entry.event for entry in journal.entries()]
+    assert "self_learning_report" in events
+
+
 def test_knowledge_graph_verification_and_compression() -> None:
     graph = KnowledgeGraph()
     node_a = Node(id="a", type="Claim", text="A", sources=["s1"], confidence=0.7, embedding=[1.0, 0.0])
@@ -522,7 +549,48 @@ def test_runtime_orchestrator_end_to_end(
     journal_events = [entry.event for entry in runtime.journal.tail(5)]
     assert "slo_snapshot" in journal_events
     all_events = [entry.event for entry in runtime.journal.entries()]
-    assert "self_learning" in all_events
+    assert "self_learning_report" in all_events
+
+
+def test_runtime_background_learning_degradation_requests(
+    knowledge_graph: KnowledgeGraph, skill_store: SkillStore
+) -> None:
+    runtime = _bootstrap_runtime(knowledge_graph, skill_store)
+    request = RuntimeRequest(user_id="user-1", goal="stress test")
+    answer = {"verification": {"confidence": 0.5}}
+    failing_execution = SkillExecution(step_id="writer", skill="writer", output={"status": "error"})
+    for _ in range(2):
+        runtime._background_learn(request, answer, [failing_execution, failing_execution, failing_execution])
+    pending = runtime.pending_example_requests()
+    assert pending and pending[0]["task"] == "writer"
+    assert runtime.degradation_state()["writer"] >= runtime.self_learner.drift_threshold
+    runtime.upload_counterexamples(
+        "writer",
+        [
+            {
+                "status": "ok",
+                "gradients": {"success": 1.0, "penalty": 0.0},
+                "metadata": {"note": "annotated"},
+                "confidence": 0.1,
+            },
+            {
+                "status": "ok",
+                "gradients": {"success": 1.0, "penalty": 0.0},
+                "metadata": {"note": "annotated"},
+                "confidence": 0.1,
+            },
+            {
+                "status": "ok",
+                "gradients": {"success": 1.0, "penalty": 0.0},
+                "metadata": {"note": "annotated"},
+                "confidence": 0.1,
+            },
+        ],
+    )
+    assert not runtime.pending_example_requests()
+    events = [entry.event for entry in runtime.journal.entries()]
+    assert "self_learning_degradation" in events
+    assert "self_learning_counterexamples" in events
 
 
 def test_skill_policy_violation_blocks_execution(

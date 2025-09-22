@@ -4,10 +4,11 @@ from __future__ import annotations
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from typing import Deque, Dict, Mapping, MutableMapping, Sequence
+from typing import Deque, Dict, Mapping, MutableMapping, Optional, Sequence
 
 from kolibri_x.core.encoders import ContinualLearner
 from kolibri_x.personalization.federated import ModelUpdate, SecureAggregator
+from kolibri_x.runtime.journal import ActionJournal
 
 
 def _clamp(value: float, minimum: float = 0.0, maximum: float = 1.0) -> float:
@@ -42,6 +43,9 @@ class BackgroundSelfLearner:
         min_weight: float = 0.05,
         history_size: int = 32,
         sample_limit: int = 256,
+        drift_alpha: float = 0.2,
+        drift_threshold: float = 0.6,
+        journal: Optional[ActionJournal] = None,
     ) -> None:
         if clipping <= 0.0:
             raise ValueError("clipping must be positive")
@@ -51,6 +55,10 @@ class BackgroundSelfLearner:
             raise ValueError("history_size must be positive")
         if sample_limit <= 0:
             raise ValueError("sample_limit must be positive")
+        if not 0.0 < drift_alpha <= 1.0:
+            raise ValueError("drift_alpha must be within (0, 1]")
+        if not 0.0 <= drift_threshold <= 1.0:
+            raise ValueError("drift_threshold must be within [0, 1]")
 
         self.learner = learner or ContinualLearner()
         self._noise_scale = noise_scale
@@ -60,6 +68,10 @@ class BackgroundSelfLearner:
         self._pending_counts: MutableMapping[str, int] = {}
         self._history: Deque[Mapping[str, object]] = deque(maxlen=history_size)
         self._samples: Deque[SelfLearningSample] = deque(maxlen=sample_limit)
+        self._drift_alpha = drift_alpha
+        self._drift_threshold = drift_threshold
+        self._drift: Dict[str, float] = {}
+        self._journal = journal
 
     def enqueue(
         self,
@@ -92,6 +104,7 @@ class BackgroundSelfLearner:
         )
         self._samples.append(sample)
         self._pending_counts[task_id] = self._pending_counts.get(task_id, 0) + 1
+        self._update_drift(task_id, sample.metadata.get("status"))
 
     def step(self) -> Mapping[str, Mapping[str, float]]:
         """Aggregates pending updates and refreshes learner weights."""
@@ -111,8 +124,11 @@ class BackgroundSelfLearner:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "updates": {task: dict(values) for task, values in updates.items()},
             "pending": dict(self._pending_counts),
+            "drift": dict(self._drift),
+            "samples": len(self._samples),
         }
         self._history.append(entry)
+        self._publish_report(entry)
         return updates
 
     def history(self, limit: int = 5) -> Sequence[Mapping[str, object]]:
@@ -126,12 +142,55 @@ class BackgroundSelfLearner:
             "tasks": sorted(self._aggregators.keys()),
             "pending": dict(self._pending_counts),
             "history": list(self.history()),
+            "drift": dict(self._drift),
         }
 
     def recent_samples(self, limit: int = 5) -> Sequence[SelfLearningSample]:
         if limit <= 0:
             return tuple()
         return tuple(list(self._samples)[-limit:])
+
+    def drift_scores(self) -> Mapping[str, float]:
+        return dict(self._drift)
+
+    def degraded_tasks(self) -> Mapping[str, float]:
+        return {task: score for task, score in self._drift.items() if score >= self._drift_threshold}
+
+    @property
+    def drift_threshold(self) -> float:
+        return self._drift_threshold
+
+    def bind_journal(self, journal: Optional[ActionJournal]) -> None:
+        self._journal = journal
+
+    def _update_drift(self, task_id: str, status: object) -> None:
+        signal = self._error_signal(status)
+        previous = self._drift.get(task_id)
+        if previous is None:
+            updated = signal
+        else:
+            updated = previous + self._drift_alpha * (signal - previous)
+        self._drift[task_id] = _clamp(updated)
+
+    def _error_signal(self, status: object) -> float:
+        label = str(status or "unknown").lower()
+        if label in {"ok", "cached", "success"}:
+            return 0.0
+        if label in {"skipped", "noop"}:
+            return 0.1
+        return 1.0
+
+    def _publish_report(self, entry: Mapping[str, object]) -> None:
+        if not self._journal:
+            return
+        payload = {
+            "timestamp": entry["timestamp"],
+            "drift": dict(entry.get("drift", {})),
+            "pending": dict(entry.get("pending", {})),
+            "tasks": sorted(entry.get("updates", {}).keys()),
+            "samples": entry.get("samples", 0),
+        }
+        self._journal.append("self_learning_report", payload)
 
 
 __all__ = ["BackgroundSelfLearner", "SelfLearningSample"]
