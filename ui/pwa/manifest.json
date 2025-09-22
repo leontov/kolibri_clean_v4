@@ -1,0 +1,9 @@
+{
+  "name": "Kolibri ИИ",
+  "short_name": "Kolibri",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#0d1117",
+  "theme_color": "#22d3ee",
+  "icons": []
+}

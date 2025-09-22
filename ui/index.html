@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="manifest" href="./pwa/manifest.json" />
+    <link rel="stylesheet" href="./style.css" />
+    <title>Kolibri AI</title>
+  </head>
+  <body>
+    <main>
+      <section class="panel chat">
+        <h1>Kolibri ИИ</h1>
+        <textarea id="msg" placeholder="Введите сообщение..."></textarea>
+        <div class="controls">
+          <button id="send">Отправить</button>
+          <button id="tick">Tick</button>
+        </div>
+      </section>
+      <section class="panel status">
+        <h2>Метрики</h2>
+        <div class="metric">eff: <span id="eff">0.0000</span></div>
+        <div class="metric">compl: <span id="compl">0.00</span></div>
+        <h2>Цепочка</h2>
+        <pre id="out"></pre>
+      </section>
+    </main>
+    <script src="./app.js" type="module"></script>
+  </body>
+</html>
