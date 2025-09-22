@@ -1,12 +1,118 @@
 #include "engine.h"
 
 #include <math.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "digit.h"
 #include "persist.h"
+
+extern int kol_language_generate(char *buf, size_t cap);
+
+static void append_fmt(char *buf, size_t cap, size_t *pos, const char *fmt, ...) {
+    if (!buf || !pos || cap == 0) {
+        return;
+    }
+    if (*pos >= cap) {
+        *pos = cap - 1;
+        buf[cap - 1] = '\0';
+        return;
+    }
+    va_list args;
+    va_start(args, fmt);
+    size_t available = cap - *pos;
+    if (available == 0) {
+        *pos = cap - 1;
+        buf[cap - 1] = '\0';
+        va_end(args);
+        return;
+    }
+    int written = vsnprintf(buf + *pos, available, fmt, args);
+    va_end(args);
+    if (written < 0) {
+        buf[*pos] = '\0';
+        return;
+    }
+    if ((size_t)written >= available) {
+        *pos = cap - 1;
+        buf[cap - 1] = '\0';
+        return;
+    }
+    *pos += (size_t)written;
+}
+
+static void append_utf8_clipped(char *buf, size_t cap, size_t *pos, const char *src) {
+    if (!buf || !pos || !src || cap == 0) {
+        return;
+    }
+    if (*pos >= cap) {
+        *pos = cap - 1;
+        buf[cap - 1] = '\0';
+        return;
+    }
+    size_t available = cap - *pos;
+    if (available <= 1) {
+        buf[cap - 1] = '\0';
+        *pos = cap - 1;
+        return;
+    }
+    size_t idx = 0u;
+    while (src[idx] != '\0' && available > 1u) {
+        unsigned char ch = (unsigned char)src[idx];
+        size_t        char_len = 1u;
+        if ((ch & 0x80u) == 0u) {
+            char_len = 1u;
+        } else if ((ch & 0xE0u) == 0xC0u) {
+            char_len = 2u;
+        } else if ((ch & 0xF0u) == 0xE0u) {
+            char_len = 3u;
+        } else if ((ch & 0xF8u) == 0xF0u) {
+            char_len = 4u;
+        }
+        if (char_len > available - 1u) {
+            break;
+        }
+        memcpy(buf + *pos, src + idx, char_len);
+        *pos += char_len;
+        available -= char_len;
+        idx += char_len;
+    }
+    buf[*pos] = '\0';
+}
+
+static size_t extract_memory_keywords(const char *summary, char words[][64], size_t max_words) {
+    if (!summary || !words || max_words == 0u) {
+        return 0u;
+    }
+    size_t count = 0u;
+    const char *ptr = summary;
+    while (count < max_words) {
+        const char *bullet = strstr(ptr, "• ");
+        if (!bullet) {
+            break;
+        }
+        bullet += strlen("• ");
+        const char *stop = strstr(bullet, " ×");
+        if (!stop) {
+            break;
+        }
+        size_t len = (size_t)(stop - bullet);
+        if (len >= 64u) {
+            len = 63u;
+        }
+        memcpy(words[count], bullet, len);
+        words[count][len] = '\0';
+        while (len > 0u && (unsigned char)words[count][len - 1u] <= ' ') {
+            --len;
+            words[count][len] = '\0';
+        }
+        ++count;
+        ptr = stop;
+    }
+    return count;
+}
 
 static void init_dataset(KolEngine *engine) {
     size_t n = sizeof(engine->xs) / sizeof(engine->xs[0]);
@@ -60,25 +166,90 @@ static size_t compute_digits(KolEngine *engine, uint8_t *buffer, size_t capacity
 }
 
 static void digits_to_text(const uint8_t *digits, size_t len, char *buf, size_t cap) {
-    static const char SYMBOLS[] = " ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789.,?!";
-    size_t symbol_count = sizeof(SYMBOLS) - 1;
     if (!buf || cap == 0) {
         return;
     }
+    buf[0] = '\0';
     size_t pos = 0;
-    size_t i = 0;
-    while (i + 1 < len && pos + 1 < cap) {
-        unsigned int value = (unsigned int)digits[i] * 10u + (unsigned int)digits[i + 1];
-        buf[pos++] = SYMBOLS[value % symbol_count];
-        i += 2;
+
+    char language_summary[512];
+    language_summary[0] = '\0';
+    int lang_len = kol_language_generate(language_summary, sizeof(language_summary));
+    if (lang_len < 0) {
+        language_summary[0] = '\0';
     }
-    if (i < len && pos + 1 < cap) {
-        buf[pos++] = SYMBOLS[digits[i] % symbol_count];
+
+    static const char *PHASES[] = {"набл.", "гип.", "реш."};
+    static const char *DIGIT_TRAITS[] = {"тишина", "искры",  "ритм",  "волны", "фокус",
+                                         "узор",   "связь", "резон", "ускор", "свет"};
+    static const char *PEAK_NOTES[] = {"тихо",   "мягко", "ритм",  "волнует", "фокус",
+                                       "структура", "согласие", "резонанс", "ускор", "ярко"};
+
+    if (!digits || len == 0) {
+        append_fmt(buf, cap, &pos, "Узор пока не проявлен.");
+    } else {
+        append_fmt(buf, cap, &pos, "Узор: ");
+        size_t segment_count = len < 1 ? len : 1;
+        for (size_t i = 0; i < segment_count; ++i) {
+            unsigned int value = digits[i] % 10u;
+            double       intensity = (double)value / 9.0 * 100.0;
+            if (intensity < 0.0) {
+                intensity = 0.0;
+            }
+            if (intensity > 100.0) {
+                intensity = 100.0;
+            }
+            const char *phase = PHASES[i % (sizeof(PHASES) / sizeof(PHASES[0]))];
+            const char *trait = DIGIT_TRAITS[value % (sizeof(DIGIT_TRAITS) / sizeof(DIGIT_TRAITS[0]))];
+            append_fmt(buf, cap, &pos, "%s%s=%s %.0f%%", i > 0 ? "; " : "", phase, trait,
+                       intensity);
+        }
+        append_fmt(buf, cap, &pos, ". ");
+
+        double  sum = 0.0;
+        uint8_t peak = 0u;
+        for (size_t i = 0; i < len; ++i) {
+            sum += digits[i];
+            if (digits[i] > peak) {
+                peak = digits[i];
+            }
+        }
+        double mean = len > 0 ? sum / (double)len : 0.0;
+        double mean_percent = (mean / 9.0) * 100.0;
+        double peak_percent = ((double)peak / 9.0) * 100.0;
+        if (mean_percent < 0.0) {
+            mean_percent = 0.0;
+        }
+        if (mean_percent > 100.0) {
+            mean_percent = 100.0;
+        }
+        if (peak_percent < 0.0) {
+            peak_percent = 0.0;
+        }
+        if (peak_percent > 100.0) {
+            peak_percent = 100.0;
+        }
+        const char *note = PEAK_NOTES[peak % (sizeof(PEAK_NOTES) / sizeof(PEAK_NOTES[0]))];
+        append_fmt(buf, cap, &pos, "Ср %.0f%% | Пик %.0f%% (%s).", mean_percent, peak_percent,
+                   note);
     }
-    if (pos >= cap) {
-        pos = cap - 1;
+
+    if (language_summary[0] != '\0') {
+        char   keywords[3][64];
+        size_t keyword_count = extract_memory_keywords(language_summary, keywords, 3u);
+        if (keyword_count > 0u) {
+            append_fmt(buf, cap, &pos, "\nПамять: %s.", keywords[0]);
+        } else {
+            append_fmt(buf, cap, &pos, "\nПамять: ");
+            append_utf8_clipped(buf, cap, &pos, language_summary);
+        }
+    } else {
+        append_fmt(buf, cap, &pos, "\nПамять: ждёт новых сигналов.");
     }
-    buf[pos] = '\0';
+
+    if (cap > 0) {
+        buf[cap - 1] = '\0';
+    }
 }
 
 static void engine_refresh_output(KolEngine *engine) {

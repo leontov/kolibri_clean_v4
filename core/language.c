@@ -217,43 +217,98 @@ int language_generate(const KolLanguage *lang, char *buf, size_t cap) {
             }
         }
     }
-    char list[256];
-    size_t list_len = 0u;
-    list[0] = '\0';
+    const KolLanguageWord *selected[3] = {NULL, NULL, NULL};
+    uint32_t                counts[3] = {0u, 0u, 0u};
+    size_t                  actual = 0u;
     for (size_t j = 0; j < 3; ++j) {
         if (top_idx[j] == SIZE_MAX) {
             continue;
         }
-        const char *word = lang->words[top_idx[j]].word;
-        if (!word[0]) {
+        const KolLanguageWord *word = &lang->words[top_idx[j]];
+        if (!word->word[0]) {
             continue;
         }
-        if (list_len > 0u) {
-            if (list_len + 2u >= sizeof(list)) {
-                break;
-            }
-            list[list_len++] = ',';
-            list[list_len++] = ' ';
-            list[list_len] = '\0';
-        }
-        size_t word_len = strlen(word);
-        if (list_len + word_len >= sizeof(list)) {
-            break;
-        }
-        memcpy(&list[list_len], word, word_len);
-        list_len += word_len;
-        list[list_len] = '\0';
+        selected[actual] = word;
+        counts[actual] = word->count;
+        actual += 1u;
     }
-    if (list_len == 0u) {
+    if (actual == 0u) {
         int fallback = snprintf(buf, cap, "%s", KOL_LANGUAGE_DEFAULT_MESSAGE);
         if (fallback < 0 || (size_t)fallback >= cap) {
             return -1;
         }
         return fallback;
     }
-    int written = snprintf(buf, cap, "Kolibri запомнил: %s", list);
-    if (written < 0 || (size_t)written >= cap) {
+    uint32_t cluster_total = 0u;
+    for (size_t i = 0; i < actual; ++i) {
+        cluster_total += counts[i];
+    }
+    size_t offset = 0u;
+    int written = snprintf(buf, cap, "Колибри выделяет темы:\n");
+    if (written < 0) {
         return -1;
     }
-    return written;
+    if ((size_t)written >= cap) {
+        if (cap > 0u) {
+            buf[cap - 1u] = '\0';
+        }
+        return cap > 0 ? (int)(cap - 1) : -1;
+    }
+    offset = (size_t)written;
+    for (size_t i = 0; i < actual; ++i) {
+        double share = 0.0;
+        if (cluster_total > 0u) {
+            share = (double)counts[i] * 100.0 / (double)cluster_total;
+        }
+        if (share < 0.0) {
+            share = 0.0;
+        }
+        if (share > 100.0) {
+            share = 100.0;
+        }
+        written = snprintf(buf + offset, cap - offset, "• %s ×%u (%.0f%%)\n",
+                           selected[i]->word, (unsigned)counts[i], share);
+        if (written < 0) {
+            return -1;
+        }
+        if ((size_t)written >= cap - offset) {
+            offset = cap > 0 ? cap - 1u : 0u;
+            if (cap > 0u) {
+                buf[offset] = '\0';
+            }
+            return (int)offset;
+        }
+        offset += (size_t)written;
+    }
+    const KolLanguageWord *primary = selected[0];
+    double                 primary_share = 0.0;
+    if (cluster_total > 0u) {
+        primary_share = (double)counts[0] * 100.0 / (double)cluster_total;
+        if (primary_share < 0.0) {
+            primary_share = 0.0;
+        }
+        if (primary_share > 100.0) {
+            primary_share = 100.0;
+        }
+    }
+    const char *tone = "подсказывает направление";
+    if (primary_share > 60.0) {
+        tone = "ведёт диалог";
+    } else if (primary_share > 30.0) {
+        tone = "звучит отчётливо";
+    }
+    written = snprintf(buf + offset, cap - offset,
+                       "Короткая мысль: \"%s\" %s.", primary->word, tone);
+    if (written < 0) {
+        return -1;
+    }
+    if ((size_t)written >= cap - offset) {
+        offset = cap > 0 ? cap - 1u : 0u;
+        if (cap > 0u) {
+            buf[offset] = '\0';
+        }
+        return (int)offset;
+    }
+    offset += (size_t)written;
+    return (int)offset;
 }

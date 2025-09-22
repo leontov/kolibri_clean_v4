@@ -30,6 +30,8 @@ async function boot() {
   const effEl = document.getElementById('eff');
   const complEl = document.getElementById('compl');
   const outEl = document.getElementById('out');
+  const storyEl = document.getElementById('story');
+  const memoryEl = document.getElementById('memory');
 
   document.getElementById('send').addEventListener('click', () => {
     const txt = msgEl.value.trim();
@@ -39,12 +41,15 @@ async function boot() {
     wasm.kol_free(ptr);
     msgEl.value = '';
     refreshHud();
+    refreshTail();
+    refreshInsights();
   });
 
   document.getElementById('tick').addEventListener('click', () => {
     wasm.kol_tick();
     refreshHud();
     refreshTail();
+    refreshInsights();
   });
 
   function refreshHud() {
@@ -61,8 +66,37 @@ async function boot() {
     outEl.textContent = json;
   }
 
+  function readWasmText(invoker) {
+    const cap = 2048;
+    const ptr = wasm.kol_alloc(cap);
+    try {
+      const len = invoker(ptr, cap);
+      const usable = len > 0 ? len : 0;
+      const raw = readString(instance, ptr, usable);
+      return raw.trim();
+    } finally {
+      wasm.kol_free(ptr);
+    }
+  }
+
+  function refreshNarrative() {
+    const text = readWasmText((ptr, cap) => wasm.kol_emit_text(ptr, cap));
+    storyEl.textContent = text || '—';
+  }
+
+  function refreshMemory() {
+    const text = readWasmText((ptr, cap) => wasm.kol_language_generate(ptr, cap));
+    memoryEl.textContent = text || '—';
+  }
+
+  function refreshInsights() {
+    refreshNarrative();
+    refreshMemory();
+  }
+
   refreshHud();
   refreshTail();
+  refreshInsights();
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./pwa/sw.js').catch(() => {});

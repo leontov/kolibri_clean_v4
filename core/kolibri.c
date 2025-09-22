@@ -85,8 +85,6 @@ int kol_chat_push(const char *text) {
         return -1;
     }
     language_observe(&g_language, text);
-    if (engine_ingest_text(g_engine, text, &g_event) != 0) {
-
     KolEvent incoming;
     memset(&incoming, 0, sizeof(incoming));
     if (engine_ingest_text(g_engine, text, &incoming) != 0) {
