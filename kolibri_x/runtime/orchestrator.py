@@ -19,8 +19,12 @@ import time
 
 from collections.abc import Iterable as IterableABC
 from dataclasses import dataclass, field
+
+from datetime import datetime, timezone
+
 from datetime import datetime
 from pathlib import Path
+
 from typing import Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 from typing import Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple, Union
@@ -375,6 +379,43 @@ class RuntimeResponse:
     mksi: Mapping[str, Mapping[str, float]] = field(default_factory=dict)
 
 
+@dataclass
+class PlanRecord:
+    """Metadata for successful plan executions."""
+
+    key: str
+    goal: str
+    hints: Tuple[str, ...]
+    plan: Plan
+    executions: Tuple[SkillExecution, ...]
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    last_used: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    usage_count: int = 0
+
+    def mark_used(self) -> None:
+        self.last_used = datetime.now(timezone.utc)
+
+    def record_success(self, executions: Sequence[SkillExecution]) -> None:
+        self.usage_count += 1
+        self.last_used = datetime.now(timezone.utc)
+        self.executions = tuple(
+            SkillExecution(step_id=item.step_id, skill=item.skill, output=dict(item.output))
+            for item in executions
+        )
+
+    def to_dict(self) -> Mapping[str, object]:
+        return {
+            "key": self.key,
+            "goal": self.goal,
+            "hints": list(self.hints),
+            "plan": self.plan.as_dict(),
+            "executions": [execution.to_dict() for execution in self.executions],
+            "created_at": self.created_at.isoformat(),
+            "last_used": self.last_used.isoformat(),
+            "usage_count": self.usage_count,
+        }
+
+
 class KolibriRuntime:
     """Coordinates encoding, planning, retrieval, skills, and empathy."""
 
@@ -478,6 +519,11 @@ class KolibriRuntime:
         if self_learning_storage and self_learner is None:
             self_learner = BackgroundSelfLearner()
         self.self_learner = self_learner
+
+        self._plan_cache: Dict[str, PlanRecord] = {}
+        self._plan_journal: List[PlanRecord] = []
+        self._plan_journal_limit = 32
+
         if self_learning_storage:
             self._self_learning_path = Path(self_learning_storage).expanduser()
         if self.self_learner and self._self_learning_path:
@@ -619,6 +665,7 @@ class KolibriRuntime:
             cached_payload = self.cache.get(cache_key) if self.cache else None
         if cached_payload:
             plan = self._plan_from_dict(cached_payload["plan"])
+            self._warm_plan_cache(plan, request.hints, cached_payload.get("executions", []))
             reasoning.add_step("cache", "served response from offline cache", [], confidence=0.95)
             self.journal.append("cache_hit", {"user_id": request.user_id, "goal": request.goal})
             executions = [SkillExecution.from_dict(data) for data in cached_payload.get("executions", [])]
@@ -647,22 +694,43 @@ class KolibriRuntime:
                 mksi=mksi_snapshot.as_dict(),
             )
 
-        with self.metrics.time_stage("planning"):
-            plan = self.planner.plan(request.goal, hints=request.hints)
-        reasoning.add_step(
-            "plan",
-            f"generated {len(plan.steps)} steps",
-            [step.id for step in plan.steps],
-            confidence=0.7,
-        )
-        self.journal.append(
-            "plan",
-            {
-                "goal": request.goal,
-                "step_count": len(plan.steps),
-                "skills": [step.skill for step in plan.steps],
-            },
-        )
+        plan_key = self._plan_signature(request.goal, request.hints)
+        cached_plan = self._plan_cache.get(plan_key)
+        if cached_plan:
+            cached_plan.mark_used()
+            plan = cached_plan.plan
+            reasoning.add_step(
+                "plan_cache",
+                f"reused cached plan with {len(plan.steps)} steps",
+                [step.id for step in plan.steps],
+                confidence=0.85,
+            )
+            self.journal.append(
+                "plan_cache_hit",
+                {
+                    "goal": request.goal,
+                    "step_count": len(plan.steps),
+                    "skills": [step.skill for step in plan.steps],
+                },
+            )
+        else:
+            with self.metrics.time_stage("planning"):
+                plan = self.planner.plan(request.goal, hints=request.hints)
+            reasoning.add_step(
+                "plan",
+                f"generated {len(plan.steps)} steps",
+                [step.id for step in plan.steps],
+                confidence=0.7,
+            )
+            self.journal.append(
+                "plan",
+                {
+                    "goal": request.goal,
+                    "step_count": len(plan.steps),
+                    "skills": [step.skill for step in plan.steps],
+                    "dependencies": [list(step.dependencies) for step in plan.steps],
+                },
+            )
 
         rag_query = transcript or request.goal
         with self.metrics.time_stage("rag_cache_lookup"):
@@ -702,6 +770,8 @@ class KolibriRuntime:
 
         with self.metrics.time_stage("execute_plan"):
             executions = self._execute_plan(plan, request, filtered_modalities, reasoning)
+        if executions and all(execution.output.get("status") == "ok" for execution in executions):
+            self._record_plan_success(plan, request.hints, executions)
         with self.metrics.time_stage("profile_signals"):
             profile = self.profiler.bulk_record(request.user_id, request.signals)
         with self.metrics.time_stage("empathy_modulation"):
@@ -1141,6 +1211,91 @@ class KolibriRuntime:
             )
         return Plan(goal=str(payload.get("goal", "")), steps=steps)
 
+    def _plan_signature(self, goal: str, hints: Sequence[str]) -> str:
+        canonical = {
+            "goal": goal.strip().lower(),
+            "hints": [str(hint).strip().lower() for hint in hints if isinstance(hint, str) and hint.strip()],
+        }
+        digest = json.dumps(canonical, sort_keys=True, ensure_ascii=False)
+        return hashlib.sha1(digest.encode("utf-8")).hexdigest()
+
+    def _record_plan_success(
+        self,
+        plan: Plan,
+        hints: Sequence[str],
+        executions: Sequence[SkillExecution],
+    ) -> None:
+        key = self._plan_signature(plan.goal, hints)
+        now = datetime.now(timezone.utc)
+        record = self._plan_cache.get(key)
+        if record is None:
+            record = PlanRecord(
+                key=key,
+                goal=plan.goal,
+                hints=tuple(str(hint) for hint in hints if isinstance(hint, str)),
+                plan=plan,
+                executions=tuple(
+                    SkillExecution(step_id=item.step_id, skill=item.skill, output=dict(item.output))
+                    for item in executions
+                ),
+                created_at=now,
+                last_used=now,
+                usage_count=1,
+            )
+            self._plan_cache[key] = record
+            self._plan_journal.append(record)
+            if len(self._plan_journal) > self._plan_journal_limit:
+                self._plan_journal.pop(0)
+            self.journal.append(
+                "plan_cache_store",
+                {
+                    "goal": plan.goal,
+                    "step_count": len(plan.steps),
+                    "hints": list(hints),
+                },
+            )
+        else:
+            record.record_success(executions)
+            self.journal.append(
+                "plan_cache_update",
+                {
+                    "goal": plan.goal,
+                    "step_count": len(plan.steps),
+                    "usage_count": record.usage_count,
+                },
+            )
+
+    def _warm_plan_cache(
+        self,
+        plan: Plan,
+        hints: Sequence[str],
+        executions_payload: Sequence[Mapping[str, object]],
+    ) -> None:
+        key = self._plan_signature(plan.goal, hints)
+        if key in self._plan_cache:
+            return
+        executions: List[SkillExecution] = []
+        for payload in executions_payload:
+            if isinstance(payload, Mapping):
+                executions.append(SkillExecution.from_dict(payload))
+        if not executions or not all(execution.output.get("status") == "ok" for execution in executions):
+            return
+        self._record_plan_success(plan, hints, executions)
+        # ensure usage count reflects the original execution that produced the cache entry
+        record = self._plan_cache.get(key)
+        if record:
+            record.usage_count = max(1, record.usage_count)
+
+    def plan_journal(self) -> Sequence[PlanRecord]:
+        return tuple(self._plan_journal)
+
+    def replay_plan(self, goal: str, hints: Sequence[str] | None = None) -> Optional[Mapping[str, object]]:
+        key = self._plan_signature(goal, hints or ())
+        record = self._plan_cache.get(key)
+        if not record:
+            return None
+        return record.to_dict()
+
     def _cache_key(
         self,
         user_id: str,
@@ -1179,4 +1334,5 @@ __all__ = [
     "SkillExecution",
     "SkillExecutionError",
     "SkillSandbox",
+    "PlanRecord",
 ]
