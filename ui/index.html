@@ -16,6 +16,14 @@
           <button id="send">Отправить</button>
           <button id="tick">Tick</button>
         </div>
+        <div class="controls">
+          <label class="auto-count">
+            Авто тики
+            <input id="autoCount" type="number" min="1" step="1" value="10" />
+          </label>
+          <button id="autoRun">Авто</button>
+          <button id="autoStop" disabled>Стоп</button>
+        </div>
       </section>
       <section class="panel status">
         <h2>Метрики</h2>
@@ -23,6 +31,8 @@
         <div class="metric">compl: <span id="compl">0.00</span></div>
         <h2>Цепочка</h2>
         <pre id="out"></pre>
+        <h2>Ответ</h2>
+        <pre id="answer"></pre>
       </section>
     </main>
     <script src="./app.js" type="module"></script>
