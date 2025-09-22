@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timedelta, timezone
 import sys
 from pathlib import Path
-from typing import Mapping
+from typing import Dict, List, Mapping
 
 import pytest
 
@@ -52,14 +53,27 @@ from kolibri_x.runtime.journal import ActionJournal  # noqa: E402
 from kolibri_x.runtime.orchestrator import KolibriRuntime, RuntimeRequest, SkillSandbox  # noqa: E402
 from kolibri_x.runtime.self_learning import BackgroundSelfLearner  # noqa: E402
 from kolibri_x.runtime.workflow import ReminderRule, WorkflowManager  # noqa: E402
-from kolibri_x.skills.store import SkillManifest, SkillPolicyViolation, SkillStore  # noqa: E402
+from kolibri_x.skills.store import (  # noqa: E402
+    SkillManifest,
+    SkillManifestValidationError,
+    SkillPolicyViolation,
+    SkillStore,
+)
 from kolibri_x.xai.panel import ExplanationPanel  # noqa: E402
 from kolibri_x.xai.reasoning import ReasoningLog  # noqa: E402
 
 
 @pytest.fixture()
 def knowledge_graph() -> KnowledgeGraph:
-    graph = KnowledgeGraph()
+    config: Mapping[str, object] = {
+        "knowledge_graph": {
+            "critics": {
+                "confidence_gate": {"type": "confidence_threshold", "threshold": 0.6},
+                "keyword_focus": {"type": "keyword_presence", "keywords": ["kolibri"]},
+            }
+        }
+    }
+    graph = KnowledgeGraph(config=config)
     graph.add_node(
         Node(
             id="claim:collaboration",
@@ -98,6 +112,53 @@ def skill_store() -> SkillStore:
     )
     store.register(manifest)
     return store
+
+
+def test_skill_manifest_schema_validation() -> None:
+    with pytest.raises(SkillManifestValidationError):
+        SkillManifest.from_dict(
+            {
+                "name": "invalid",
+                "version": "1.0",
+                "inputs": ["text"],
+                "permissions": ["net.read:whitelist"],
+                "billing": "per_call",
+                "policy": {},
+                "entry": "invalid.py",
+            }
+        )
+
+    with pytest.raises(SkillManifestValidationError):
+        SkillManifest.from_dict(
+            {
+                "name": "invalid",
+                "version": "1.0.0",
+                "inputs": ["text"],
+                "permissions": ["net.read:whitelist"],
+                "billing": "per_call",
+                "policy": {},
+                "entry": "../escape.py",
+            }
+        )
+
+
+def test_skill_store_register_logs_rejection() -> None:
+    store = SkillStore()
+    invalid_manifest = SkillManifest(
+        name="bad-skill",
+        version="1.0.0",
+        inputs=("text",),
+        permissions=("bad-scope",),
+        billing="per_call",
+        policy={},
+        entry="bad.py",
+    )
+
+    with pytest.raises(SkillManifestValidationError):
+        store.register(invalid_manifest)
+
+    journal_events = list(store.journal.entries())
+    assert any(event.event == "skill_manifest.rejected" for event in journal_events)
 
 
 def _bootstrap_runtime(
@@ -157,8 +218,38 @@ def test_rag_pipeline_returns_supported_answer(knowledge_graph: KnowledgeGraph) 
     assert reasoning.steps(), "reasoning log should not be empty"
 
 
+def test_rag_pipeline_reuses_cached_embeddings(knowledge_graph: KnowledgeGraph) -> None:
+    class CountingEncoder(TextEncoder):
+        def __init__(self, dim: int = 16) -> None:
+            super().__init__(dim=dim)
+            self.calls: Dict[str, int] = {}
+
+        def encode(self, text: str) -> List[float]:
+            self.calls[text] = self.calls.get(text, 0) + 1
+            return super().encode(text)
+
+    encoder = CountingEncoder(dim=16)
+    pipeline = RAGPipeline(knowledge_graph, encoder=encoder)
+
+    node_texts = [node.text for node in knowledge_graph.nodes() if node.text]
+    for text in node_texts:
+        assert encoder.calls.get(text, 0) == 1
+
+    pipeline.retrieve("Explain autonomy", top_k=2)
+    pipeline.retrieve("Explain autonomy", top_k=2)
+
+    for text in node_texts:
+        assert encoder.calls.get(text, 0) == 1
+
+
 def test_graph_hybrid_memory_and_verification(knowledge_graph: KnowledgeGraph) -> None:
-    knowledge_graph.register_critic("length", lambda node: min(1.0, len(node.text.split()) / 12))
+    counter = {"calls": 0}
+
+    def counting_critic(node: Node) -> float:
+        counter["calls"] += 1
+        return min(1.0, len(node.text.split()) / 12)
+
+    knowledge_graph.register_critic("length", counting_critic)
     knowledge_graph.register_authority(
         "sources",
         lambda node: {"score": 1.0 if node.sources else 0.3, "source_count": len(node.sources)},
@@ -196,15 +287,94 @@ def test_graph_hybrid_memory_and_verification(knowledge_graph: KnowledgeGraph) -
     )
     knowledge_graph.promote_node("metric:latency")
 
-    results = knowledge_graph.verify_with_critics({})
+    results = knowledge_graph.verify_with_critics()
     assert any(result.provenance == "authority" for result in results)
     node = knowledge_graph.get_node("metric:latency")
     assert node is not None and node.metadata.get("verification_score", 0.0) > 0
+
+    initial_calls = counter["calls"]
+    assert initial_calls >= len(knowledge_graph.nodes())
+    _ = knowledge_graph.verify_with_critics()
+    assert counter["calls"] == initial_calls, "cached verification should skip critic execution"
+
+    knowledge_graph.add_node(
+        Node(
+            id="metric:latency:extra",
+            type="Metric",
+            text="Kolibri latency improves further",
+            sources=["https://kolibri.example/perf"],
+            confidence=0.8,
+        )
+    )
+    _ = knowledge_graph.verify_with_critics()
+    assert counter["calls"] > initial_calls, "adding nodes should invalidate cache"
 
     duplicates = knowledge_graph.deduplicate_embeddings()
     assert any({"metric:latency", "metric:latency:duplicate"} == set(pair) for pair in duplicates)
     assert knowledge_graph.get_node("metric:latency") is not None
     assert knowledge_graph.get_node("metric:latency:duplicate") is None
+
+
+def test_iot_bridge_batch_and_sensor_sync() -> None:
+    policy = IoTPolicy(
+        allowlist={"lamp": ["on", "off"]},
+        max_actions_per_session=10,
+        max_batch_size=2,
+        max_deferred_actions=5,
+    )
+    journal = ActionJournal()
+    hub = SensorHub()
+    bridge = IoTBridge(policy, journal=journal, sensor_hub=hub, sensor_signal_prefix="edge")
+
+    commands = [
+        IoTCommand(device_id="lamp", action="on", parameters={"value": 1.0}),
+        IoTCommand(device_id="lamp", action="off", parameters={"value": 0.0}),
+    ]
+    acknowledgements = bridge.dispatch_batch("session-1", commands)
+    assert [ack["status"] for ack in acknowledgements] == ["executed", "executed"]
+
+    sequences = hub.to_sequences()
+    assert "edge::lamp::on" in sequences
+    assert "edge::lamp::off" in sequences
+
+    assert any(entry.event == "iot_sensor_sync" for entry in journal.entries())
+
+    with pytest.raises(RuntimeError):
+        bridge.dispatch_batch(
+            "session-2",
+            commands + [IoTCommand(device_id="lamp", action="on", parameters={"value": 0.5})],
+        )
+
+
+def test_iot_bridge_deferred_merge_and_release() -> None:
+    policy = IoTPolicy(
+        allowlist={"hub": ["sync", "ping"]},
+        max_actions_per_session=10,
+        max_batch_size=3,
+        max_deferred_actions=4,
+    )
+    journal = ActionJournal()
+    bridge = IoTBridge(policy, journal=journal, sensor_hub=SensorHub())
+
+    due = IoTCommand(device_id="hub", action="sync", parameters={"value": 0.1})
+    bridge.queue_delayed("edge-session", due, available_at=time.time() - 1)
+
+    released = bridge.release_delayed()
+    assert len(released) == 1
+
+    queued = IoTCommand(device_id="hub", action="sync", parameters={"value": 0.1})
+    bridge.queue_delayed("edge-session", queued, available_at=time.time() + 10)
+
+    offline_commands = [
+        IoTCommand(device_id="hub", action="sync", parameters={"value": 0.1}),
+        IoTCommand(device_id="hub", action="ping", parameters={"value": 1.0}),
+    ]
+    acknowledgements = bridge.merge_after_offline("edge-session", offline_commands)
+    assert len(acknowledgements) == 2
+    assert {ack["action"] for ack in acknowledgements} == {"sync", "ping"}
+
+    merge_events = [entry for entry in journal.entries() if entry.event == "iot_offline_merge"]
+    assert merge_events and merge_events[-1].payload["merged"] == 2
 
 
 def test_graph_lazy_updates_and_conflict_clarifications(knowledge_graph: KnowledgeGraph) -> None:
@@ -318,6 +488,28 @@ def test_planner_aligns_steps_with_skills(skill_store: SkillStore) -> None:
     assert hierarchical.assignments
 
 
+def test_planner_respects_hint_sequences() -> None:
+    manifests = [
+        SkillManifest.from_dict(
+            {
+                "name": name,
+                "version": "0.1.0",
+                "inputs": ["text"],
+                "permissions": ["net.read:whitelist"],
+                "billing": "per_call",
+                "policy": {},
+                "entry": f"{name}.py",
+            }
+        )
+        for name in ("researcher", "writer", "reviewer")
+    ]
+    planner = NeuroSemanticPlanner({manifest.name: manifest for manifest in manifests})
+    plan = planner.plan("Prepare investor update", hints=["researcher -> writer -> reviewer"])
+    assert [step.skill for step in plan.steps] == ["researcher", "writer", "reviewer"]
+    assert plan.steps[1].dependencies == ("step-1",)
+    assert plan.steps[2].dependencies == ("step-2",)
+
+
 def test_offline_cache_eviction() -> None:
     clock = datetime(2025, 1, 1, 12, 0, 0)
 
@@ -341,6 +533,38 @@ def test_adaptive_cross_modal_transformer_decides_depth() -> None:
     result = transformer.fuse(signals, budget=1.5)
     assert set(result.modality_weights) == {"text", "image"}
     assert result.metadata["layers"]["text"] >= result.metadata["layers"]["image"]
+
+
+def test_runtime_adaptive_fusion_weights() -> None:
+    runtime = KolibriRuntime()
+    assert isinstance(runtime.cross_fusion, AdaptiveCrossModalTransformer)
+
+    reasoning = ReasoningLog()
+    embeddings = {
+        "text": [1.0, 0.4, 0.3, 0.2],
+        "audio": [0.2, 0.1, 0.05, 0.02],
+        "video": [0.3, 0.3, 0.2, 0.1],
+    }
+    signals = [
+        ModalitySignal(name="text", embedding=embeddings["text"], quality=0.95, latency_ms=12.0),
+        ModalitySignal(name="audio", embedding=embeddings["audio"], quality=0.5, latency_ms=45.0),
+        ModalitySignal(name="video", embedding=embeddings["video"], quality=0.8, latency_ms=200.0),
+    ]
+
+    runtime._fuse_modalities(embeddings, signals, reasoning)
+
+    entry = runtime.journal.tail(1)[0]
+    weights = entry.payload["weights"]
+    assert sum(weights.values()) == pytest.approx(1.0)
+    assert weights["text"] > weights["audio"] > weights["video"]
+
+    layers = entry.payload["metadata"]["layers"]
+    assert layers["text"] >= layers["audio"] >= layers["video"]
+
+    metrics_report = runtime.metrics.report()
+    assert metrics_report[f"fusion_layers::text"]["count"] >= 1.0
+
+    assert any("layers" in step.message for step in reasoning.steps())
 
 
 def test_diffusion_encoder_and_audio_calibration() -> None:
@@ -398,6 +622,36 @@ def test_background_self_learning_accumulates_updates() -> None:
     assert status["pending"]["writer"] == 0
     history = learner.history()
     assert history and history[-1]["updates"].get("writer")
+
+
+def test_background_self_learning_persistence(tmp_path: Path) -> None:
+    learner = BackgroundSelfLearner()
+    learner.enqueue(
+        "writer",
+        {"success": 1.0},
+        confidence=0.2,
+        metadata={"status": "ok"},
+        user_id="user-1",
+    )
+    initial_updates = learner.step()
+    assert "writer" in initial_updates
+    state_path = tmp_path / "self_learning.json"
+    learner.save(state_path)
+
+    restored = BackgroundSelfLearner()
+    restored.load(state_path)
+
+    assert restored.learner.snapshot() == learner.learner.snapshot()
+    assert restored.status()["pending"] == learner.status()["pending"]
+    assert restored.recent_samples() == learner.recent_samples()
+
+    restored.enqueue("writer", {"success": 1.0}, confidence=0.2, user_id="user-2")
+    continued = restored.step()
+    assert "writer" in continued
+    assert pytest.approx(continued["writer"]["success"], rel=1e-6) == pytest.approx(0.6, rel=1e-6)
+    samples = restored.recent_samples(limit=2)
+    assert len(samples) == 2
+    assert samples[-1].user_id == "user-2"
 
 
 def test_knowledge_graph_verification_and_compression() -> None:
@@ -525,6 +779,30 @@ def test_runtime_orchestrator_end_to_end(
     assert "self_learning" in all_events
 
 
+def test_runtime_plan_reuse_and_replay(
+    knowledge_graph: KnowledgeGraph, skill_store: SkillStore
+) -> None:
+    runtime = _bootstrap_runtime(knowledge_graph, skill_store)
+    request = RuntimeRequest(
+        user_id="user-1",
+        goal="Draft an investor pitch deck",
+        modalities={"text": "Need a compelling narrative for Kolibri-x."},
+        hints=["writer"],
+        skill_scopes=["net.read:whitelist"],
+    )
+    runtime.process(request)
+    history = runtime.plan_journal()
+    assert history and history[0].goal == request.goal
+    assert history[0].usage_count == 1
+    replay_payload = runtime.replay_plan(request.goal, request.hints)
+    assert replay_payload is not None
+    assert replay_payload["plan"]["goal"] == request.goal
+    runtime.cache = None
+    runtime.process(request)
+    updated_history = runtime.plan_journal()
+    assert updated_history[0].usage_count >= 2
+
+
 def test_skill_policy_violation_blocks_execution(
     knowledge_graph: KnowledgeGraph, skill_store: SkillStore
 ) -> None:
@@ -588,6 +866,13 @@ def test_runtime_ingestion_and_workflow_management(
     assert report.nodes_added >= 3
     assert report.conflicts, "conflicting claims should be linked"
     assert knowledge_graph.detect_conflicts()
+    verification_entries = [
+        entry for entry in runtime.journal.entries() if entry.event == "knowledge_verification"
+    ]
+    assert verification_entries, "verification results should be journaled"
+    verification_payload = verification_entries[-1].payload
+    assert verification_payload["conflicts"], "conflict pairs must be logged"
+    assert "proofs" in verification_payload and "disputed" in verification_payload
     deadline = datetime(2025, 1, 5, tzinfo=timezone.utc)
     workflow = runtime.schedule_workflow(
         goal="Close security review",
