@@ -17,7 +17,6 @@ import time
 from collections.abc import Iterable as IterableABC
 from dataclasses import dataclass, field
 from datetime import datetime
-
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
@@ -388,6 +387,7 @@ class KolibriRuntime:
         empathy: Optional[EmpathyModulator] = None,
         cache: Optional[OfflineCache] = None,
         journal: Optional[ActionJournal] = None,
+        journal_path: Optional[str | Path] = None,
         metrics: Optional[SLOTracker] = None,
         iot_bridge: Optional[IoTBridge] = None,
         workflow_manager: Optional[WorkflowManager] = None,
@@ -424,6 +424,15 @@ class KolibriRuntime:
         self.profiler = profiler or OnDeviceProfiler()
         self.empathy = empathy or EmpathyModulator()
         self.cache = cache
+
+        self.journal_path = Path(journal_path) if journal_path else None
+        self.journal = journal or ActionJournal()
+        if self.journal_path is not None:
+            loaded = ActionJournal.load(self.journal_path)
+            self.journal._entries = list(loaded.entries())
+            if not self.journal.verify():
+                raise ValueError(f"journal integrity check failed for {self.journal_path}")
+
         self.metrics = metrics or SLOTracker()
         self.iot_bridge = iot_bridge
         self.workflow_manager = workflow_manager or WorkflowManager()
@@ -515,6 +524,16 @@ class KolibriRuntime:
         )
 
         self._active_session_id = None
+
+    def shutdown(self) -> None:
+        if self.journal_path is not None:
+            self.journal.save(self.journal_path)
+
+    def __enter__(self) -> "KolibriRuntime":
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.shutdown()
 
     def process(self, request: RuntimeRequest) -> RuntimeResponse:
         reasoning = ReasoningLog()
