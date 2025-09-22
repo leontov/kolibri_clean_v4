@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections.abc import Iterable as IterableABC
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
 
 from kolibri_x.core.encoders import (
@@ -26,15 +28,18 @@ from kolibri_x.kg.graph import KnowledgeGraph
 from kolibri_x.kg.ingest import IngestionReport, KnowledgeDocument, KnowledgeIngestor
 from kolibri_x.kg.rag import RAGPipeline
 from kolibri_x.personalization import EmpathyContext, EmpathyModulator, InteractionSignal, OnDeviceProfiler
-from kolibri_x.privacy.consent import PrivacyOperator
+from kolibri_x.privacy.consent import PolicyLayer, PrivacyOperator
 from kolibri_x.runtime.cache import OfflineCache, RAGCache
 from kolibri_x.runtime.iot import IoTBridge, IoTCommand
 from kolibri_x.runtime.journal import ActionJournal, JournalEntry
 from kolibri_x.runtime.metrics import SLOTracker
 from kolibri_x.runtime.self_learning import BackgroundSelfLearner
 from kolibri_x.runtime.workflow import ReminderEvent, ReminderRule, Workflow, WorkflowManager
-from kolibri_x.skills.store import SkillPolicyViolation, SkillStore
+from kolibri_x.skills.store import SkillManifest, SkillPolicyViolation, SkillStore
 from kolibri_x.xai.reasoning import ReasoningLog
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 SkillExecutor = Callable[[Mapping[str, object]], Mapping[str, object]]
@@ -154,6 +159,8 @@ class KolibriRuntime:
         self.fusion_budget = fusion_budget
         self.planner = planner or NeuroSemanticPlanner()
         self.skill_store = skill_store or SkillStore()
+        manifests_dir = Path(__file__).resolve().parents[1] / "skills" / "manifests"
+        self.skill_store.load_directory(manifests_dir)
         self.sandbox = sandbox or SkillSandbox()
         self.privacy = privacy or PrivacyOperator()
         self.profiler = profiler or OnDeviceProfiler()
@@ -170,12 +177,38 @@ class KolibriRuntime:
         self.alignment_engine = alignment_engine or TemporalAlignmentEngine()
         self.self_learner = self_learner
 
+        self._initialize_skills_from_metadata()
+
         skills = self.skill_store.list()
         if skills:
             self.planner.register_skills(skills)
 
         if self.iot_bridge and self.iot_bridge.journal is None:
             self.iot_bridge.journal = self.journal
+
+    def _initialize_skills_from_metadata(self) -> None:
+        registered = set(self.sandbox.registered())
+        for manifest in self.skill_store.list():
+            if manifest.name not in registered:
+                self.sandbox.register(manifest.name, self._metadata_placeholder(manifest))
+                registered.add(manifest.name)
+                LOGGER.debug("registered placeholder executor for %s", manifest.name)
+            if manifest.inputs:
+                layer = PolicyLayer(name=f"skill:{manifest.name}", scope=set(manifest.inputs))
+                self.privacy.register_layer(layer)
+
+    @staticmethod
+    def _metadata_placeholder(manifest: SkillManifest) -> SkillExecutor:
+        def executor(payload: Mapping[str, object]) -> Mapping[str, object]:
+            return {
+                "status": "not_implemented",
+                "skill": manifest.name,
+                "version": manifest.version,
+                "entry": manifest.entry,
+                "requested": dict(payload),
+            }
+
+        return executor
 
     def process(self, request: RuntimeRequest) -> RuntimeResponse:
         reasoning = ReasoningLog()
