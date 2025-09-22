@@ -382,6 +382,11 @@ bool kolibri_step(const kolibri_config_t* cfg, int step, const char* prev_hash,
     if(cfg->fingerprint[0]){
         snprintf(out->config_fingerprint, sizeof(out->config_fingerprint), "%s", cfg->fingerprint);
     }
+    if(cfg->node_id[0]){
+        snprintf(out->origin_node, sizeof(out->origin_node), "%s", cfg->node_id);
+    } else {
+        snprintf(out->origin_node, sizeof(out->origin_node), "%s", "local");
+    }
     strncpy(out->fmt, "dsl-v1", sizeof(out->fmt)-1);
 
 

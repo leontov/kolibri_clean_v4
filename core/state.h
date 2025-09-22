@@ -23,6 +23,9 @@ typedef struct {
     char formula[256];
     KolMetrics metrics;
     uint8_t leader;
+    uint8_t digits[128];
+    size_t digit_count;
+    char text[128];
 } KolOutput;
 
 #endif

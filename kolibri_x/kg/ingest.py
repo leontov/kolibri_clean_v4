@@ -102,6 +102,75 @@ class KnowledgeIngestor:
             warnings=tuple(warnings),
         )
 
+    def _split(self, content: str) -> Sequence[str]:
+        separators = {".", "!", "?"}
+        buffer: List[str] = []
+        sentence: List[str] = []
+        for char in content:
+            sentence.append(char)
+            if char in separators:
+                joined = "".join(sentence).strip()
+                if joined:
+                    buffer.append(joined)
+                sentence = []
+        trailing = "".join(sentence).strip()
+        if trailing:
+            buffer.append(trailing)
+        return tuple(buffer)
+
+    def _confidence(self, sentence: str) -> float:
+        embedding = self.encoder.encode(sentence)
+        energy = sum(abs(value) for value in embedding) / max(len(embedding), 1)
+        return max(0.2, min(0.95, 0.5 + energy))
+
+    def _find_duplicate(self, graph: KnowledgeGraph, text: str) -> Optional[Node]:
+        normalised = self._normalise(text)
+        for node in graph.nodes():
+            if node.type != "Claim":
+                continue
+            if self._normalise(node.text) == normalised:
+                return node
+        return None
+
+    def _link_conflicts(self, graph: KnowledgeGraph, node: Node) -> Sequence[Tuple[str, str]]:
+        conflicts: List[Tuple[str, str]] = []
+        signature = self._normalise(node.text, drop_negation=True)
+        is_negative = self._is_negative(node.text)
+        for existing in graph.nodes():
+            if existing.id == node.id or existing.type != "Claim":
+                continue
+            if self._is_negative(existing.text) == is_negative:
+                continue
+            if self._normalise(existing.text, drop_negation=True) == signature:
+                graph.add_edge(
+                    Edge(
+                        source=existing.id,
+                        target=node.id,
+                        relation="contradicts",
+                        weight=0.5,
+                    )
+                )
+                conflicts.append((existing.id, node.id))
+        return conflicts
+
+    def _normalise(self, text: str, drop_negation: bool = False) -> str:
+        tokens = [token.lower() for token in re.findall(r"[\w']+", text)]
+        filtered: List[str] = []
+        for token in tokens:
+            if drop_negation and token in {"not", "never", "no"}:
+                continue
+            if drop_negation and token in {"does", "do", "did"}:
+                continue
+            candidate = token[:-1] if drop_negation and token.endswith("s") and len(token) > 3 else token
+            filtered.append(candidate)
+        if drop_negation:
+            return " ".join(sorted(filtered))
+        return " ".join(filtered)
+
+    def _is_negative(self, text: str) -> bool:
+        tokens = {token.lower() for token in re.findall(r"[\w']+", text)}
+        return bool(tokens & {"not", "never", "no"})
+
     # ------------------------------------------------------------------
     # Domain database import helpers
     # ------------------------------------------------------------------
