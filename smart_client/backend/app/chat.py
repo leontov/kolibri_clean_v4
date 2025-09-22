@@ -20,8 +20,6 @@ class ChatOrchestrator:
         session = self._sessions.get_session(session_id)
         session.add_message("user", message)
 
-        await session.publish("token", {"content": ""})
-
         sources: List[Dict[str, Any]] = []
         math_result: Optional[Dict[str, Any]] = None
 
@@ -72,16 +70,20 @@ class ChatOrchestrator:
         session.add_message("assistant", reply, sources=sources, math=math_result)
 
     async def _stream_text(self, session: ChatSession, text: str) -> None:
-        tokens = text.split()
-
+        """
+        Потоково отдаёт только непустые токены и один раз отправляет событие final.
+        """
+        tokens = [t for t in text.split() if t]
         if not tokens:
             await session.publish("final", {"content": text})
             return
-
         for token in tokens:
-            await session.publish("token", {"content": f"{token} "})
-            await asyncio.sleep(0.02)
-
+            content = f"{token} "
+            # не публикуем пустые токены
+            if content.strip():
+                await session.publish("token", {"content": content})
+                await asyncio.sleep(0.02)
+        # отправляем final один раз после всех токенов
         await session.publish("final", {"content": text})
 
     def _compose_reply(

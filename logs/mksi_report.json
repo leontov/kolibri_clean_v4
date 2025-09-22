@@ -1,0 +1,15 @@
+{
+  "generated_at": "2025-09-22T07:49:12.050434+00:00",
+  "metrics": {
+    "generalization": 1.0,
+    "parsimony": 1.0,
+    "autonomy": "pending",
+    "reliability": "pending",
+    "explainability": "pending",
+    "usability": "pending",
+    "mksi": 1.0
+  },
+  "missions": [
+    "doc:writer_pitch"
+  ]
+}

@@ -1,0 +1,6 @@
+{
+  "venvPath": "smart_client/backend",
+  "venv": ".venv",
+  "include": ["smart_client/backend"],
+  "reportMissingImports": true
+}

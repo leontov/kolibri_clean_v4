@@ -24,6 +24,24 @@ python3 -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -e ".[dev]"
 uvicorn app.main:app --reload --port 8000
+
+# 0) На всякий случай выйти из других окружений
+deactivate 2>/dev/null || true
+
+# 1) Создаём venv на Python 3.12 от Homebrew (важно!)
+/opt/homebrew/bin/python3.12 -m venv .venv
+source .venv/bin/activate
+
+# 2) Обновим инструменты установки
+python -m pip install -U pip setuptools wheel
+
+# 3) Ставим бэкенд в editable-режиме с дев-зависимостями (там есть uvicorn)
+python -m pip install -e '.[dev]' || true
+
+# Если шаг выше вдруг не подтянул uvicorn/fastapi — поставим явно (без вреда)
+python -m pip install uvicorn fastapi sse-starlette httpx aiofiles pytest
+
+python -m uvicorn app.main:app --reload --port 8000
 ```
 
 

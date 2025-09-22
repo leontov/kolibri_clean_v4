@@ -1,0 +1,13 @@
+{"timestamp": "2025-09-22T07:49:08.112321+00:00", "actor": "assistant", "action": "math_solver", "detail": {"problem": "2*x + 4 = 10", "type": "equation"}}
+{"timestamp": "2025-09-22T07:49:08.113299+00:00", "actor": "assistant", "action": "math_solver", "detail": {"problem": "Площадь круга радиусом 5", "type": "circle"}}
+{"timestamp": "2025-09-22T07:49:08.146686+00:00", "actor": "user", "action": "chat", "detail": {"session_id": "e2e"}}
+{"timestamp": "2025-09-22T07:49:08.147544+00:00", "actor": "assistant", "action": "kg_search", "detail": {"query": "Что нового в Kolibri?", "results": []}}
+{"timestamp": "2025-09-22T07:49:08.147748+00:00", "actor": "assistant", "action": "kolibri_run", "detail": {"steps": 3, "seed": 21, "lambda": null, "block_id": "20250922T074908147657Z"}}
+{"timestamp": "2025-09-22T07:49:08.873078+00:00", "actor": "assistant", "action": "kolibri_verify", "detail": {"path": "logs/chain.jsonl", "ok": true}}
+{"timestamp": "2025-09-22T07:49:08.878121+00:00", "actor": "assistant", "action": "iot_safe_action_denied", "detail": {"device_id": "lamp-1", "action": "on"}}
+{"timestamp": "2025-09-22T07:49:08.882053+00:00", "actor": "user", "action": "chat", "detail": {"session_id": "math-1383279359574527623"}}
+{"timestamp": "2025-09-22T07:49:08.885646+00:00", "actor": "assistant", "action": "math_solver", "detail": {"problem": "Реши уравнение 2*x + 4 = 10", "type": "equation"}}
+{"timestamp": "2025-09-22T07:49:08.886009+00:00", "actor": "assistant", "action": "kolibri_run", "detail": {"steps": 3, "seed": 27, "lambda": null, "block_id": "20250922T074908885851Z"}}
+{"timestamp": "2025-09-22T07:49:10.280528+00:00", "actor": "user", "action": "chat", "detail": {"session_id": "math-7601164645290942426"}}
+{"timestamp": "2025-09-22T07:49:10.280790+00:00", "actor": "assistant", "action": "math_solver", "detail": {"problem": "Площадь круга радиусом 3", "type": "circle"}}
+{"timestamp": "2025-09-22T07:49:10.280929+00:00", "actor": "assistant", "action": "kolibri_run", "detail": {"steps": 3, "seed": 24, "lambda": null, "block_id": "20250922T074910280861Z"}}

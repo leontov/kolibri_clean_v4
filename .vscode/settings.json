@@ -1,0 +1,7 @@
+{
+  "python.defaultInterpreterPath": "/Users/kolibri/kolibri_clean_v4/smart_client/backend/.venv/bin/python",
+  "python.analysis.extraPaths": [
+    "smart_client/backend"
+  ],
+  "python.analysis.typeCheckingMode": "basic"
+}
