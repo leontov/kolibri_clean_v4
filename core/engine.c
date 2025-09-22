@@ -8,6 +8,35 @@
 #include "digit.h"
 #include "persist.h"
 
+
+static void engine_update_stats(KolEngine *engine) {
+    if (!engine) {
+        return;
+    }
+    size_t n = engine->dataset.count;
+    if (n == 0) {
+        engine->dataset_mean = 0.0;
+        engine->dataset_min = 0.0;
+        engine->dataset_max = 0.0;
+        return;
+    }
+    double sum = 0.0;
+    double minv = engine->ys[0];
+    double maxv = engine->ys[0];
+    for (size_t i = 0; i < n; ++i) {
+        double v = engine->ys[i];
+        sum += v;
+        if (v < minv) {
+            minv = v;
+        }
+        if (v > maxv) {
+            maxv = v;
+        }
+    }
+    engine->dataset_mean = sum / (double)n;
+    engine->dataset_min = minv;
+    engine->dataset_max = maxv;
+
 typedef struct {
     uint32_t codepoint;
     uint32_t count;
@@ -141,18 +170,159 @@ static size_t encode_utf8_digits(const char *utf8, uint8_t *digits, size_t capac
         memset(digits + idx, 0, capacity - idx);
     }
     return idx;
+
 }
 
 static void init_dataset(KolEngine *engine) {
     size_t n = sizeof(engine->xs) / sizeof(engine->xs[0]);
-    for (size_t i = 0; i < n; ++i) {
-        double t = -1.0 + 2.0 * (double)i / (double)(n - 1);
-        engine->xs[i] = t;
-        engine->ys[i] = sin(t * 3.141592653589793);
-    }
     engine->dataset.xs = engine->xs;
     engine->dataset.ys = engine->ys;
     engine->dataset.count = n;
+    for (size_t i = 0; i < n; ++i) {
+        double t = -1.0 + 2.0 * (double)i / (double)(n - 1);
+        engine->xs[i] = t;
+        double y = sin(t * 3.141592653589793);
+        engine->baseline[i] = y;
+        engine->ys[i] = y;
+    }
+    memset(engine->obs_values, 0, sizeof(engine->obs_values));
+    engine->obs_count = 0;
+    engine->obs_head = 0;
+    memset(engine->event_buffer, 0, sizeof(engine->event_buffer));
+    engine->event_count = 0;
+    engine->event_head = 0;
+    engine_update_stats(engine);
+}
+
+static double digit_to_value(uint8_t digit) {
+    double normalized = (double)digit / 9.0;
+    if (normalized < 0.0) {
+        normalized = 0.0;
+    }
+    if (normalized > 1.0) {
+        normalized = 1.0;
+    }
+    return -1.0 + 2.0 * normalized;
+}
+
+static size_t obs_capacity(const KolEngine *engine) {
+    if (!engine) {
+        return 0;
+    }
+    return sizeof(engine->obs_values) / sizeof(engine->obs_values[0]);
+}
+
+static double observation_at(const KolEngine *engine, size_t idx) {
+    if (!engine || engine->obs_count == 0 || idx >= engine->obs_count) {
+        return 0.0;
+    }
+    size_t cap = obs_capacity(engine);
+    size_t pos = (engine->obs_head + idx) % cap;
+    return engine->obs_values[pos];
+}
+
+static void push_observation(KolEngine *engine, double value) {
+    if (!engine) {
+        return;
+    }
+    size_t cap = obs_capacity(engine);
+    if (cap == 0) {
+        return;
+    }
+    if (engine->obs_count < cap) {
+        size_t pos = (engine->obs_head + engine->obs_count) % cap;
+        engine->obs_values[pos] = value;
+        engine->obs_count += 1;
+    } else {
+        engine->obs_values[engine->obs_head] = value;
+        engine->obs_head = (engine->obs_head + 1) % cap;
+    }
+}
+
+static void engine_record_event(KolEngine *engine, const KolEvent *event) {
+    if (!engine || !event || event->length == 0) {
+        return;
+    }
+    size_t cap = sizeof(engine->event_buffer) / sizeof(engine->event_buffer[0]);
+    if (cap == 0) {
+        return;
+    }
+    size_t insert_pos = (engine->event_head + engine->event_count) % cap;
+    engine->event_buffer[insert_pos] = *event;
+    if (event->length < sizeof(event->digits) / sizeof(event->digits[0])) {
+        size_t tail = sizeof(event->digits) / sizeof(event->digits[0]) - event->length;
+        memset(engine->event_buffer[insert_pos].digits + event->length, 0, tail);
+    }
+    if (engine->event_count < cap) {
+        engine->event_count += 1;
+    } else {
+        engine->event_head = (engine->event_head + 1) % cap;
+    }
+    for (size_t i = 0; i < event->length; ++i) {
+        double value = digit_to_value(event->digits[i]);
+        push_observation(engine, value);
+    }
+}
+
+static void engine_prepare_dataset(KolEngine *engine) {
+    if (!engine) {
+        return;
+    }
+    size_t n = engine->dataset.count;
+    if (n == 0) {
+        engine->dataset_mean = 0.0;
+        engine->dataset_min = 0.0;
+        engine->dataset_max = 0.0;
+        return;
+    }
+    for (size_t i = 0; i < n; ++i) {
+        engine->ys[i] = engine->baseline[i];
+    }
+    size_t real_count = engine->obs_count;
+    if (real_count > n) {
+        real_count = n;
+    }
+    if (real_count > 0) {
+        double raw_min = observation_at(engine, 0);
+        double raw_max = raw_min;
+        for (size_t i = 1; i < engine->obs_count; ++i) {
+            double v = observation_at(engine, i);
+            if (v < raw_min) {
+                raw_min = v;
+            }
+            if (v > raw_max) {
+                raw_max = v;
+            }
+        }
+        if (raw_max - raw_min < 1e-9) {
+            raw_max = raw_min + 1e-9;
+        }
+        size_t start = n - real_count;
+        for (size_t i = 0; i < real_count; ++i) {
+            size_t obs_index = engine->obs_count - real_count + i;
+            double raw = observation_at(engine, obs_index);
+            double norm = (raw - raw_min) / (raw_max - raw_min);
+            norm = norm * 2.0 - 1.0;
+            engine->ys[start + i] = norm;
+        }
+    }
+    engine_update_stats(engine);
+}
+
+void engine_reset_dataset(KolEngine *engine) {
+    if (!engine) {
+        return;
+    }
+    memset(engine->obs_values, 0, sizeof(engine->obs_values));
+    engine->obs_count = 0;
+    engine->obs_head = 0;
+    memset(engine->event_buffer, 0, sizeof(engine->event_buffer));
+    engine->event_count = 0;
+    engine->event_head = 0;
+    for (size_t i = 0; i < engine->dataset.count; ++i) {
+        engine->ys[i] = engine->baseline[i];
+    }
+    engine_update_stats(engine);
 }
 
 static uint8_t encode_sample(double value) {
@@ -306,11 +476,9 @@ int engine_tick(KolEngine *engine, const KolEvent *in, KolOutput *out) {
         return -1;
     }
     if (in && in->length > 0) {
-        size_t count = engine->dataset.count;
-        for (size_t i = 0; i < count && i < in->length; ++i) {
-            engine->ys[i] = -1.0 + 2.0 * ((double)in->digits[i] / 9.0);
-        }
+        engine_record_event(engine, in);
     }
+    engine_prepare_dataset(engine);
     KolDigit *root = fractal_root(engine->fractal);
     digit_self_train(root, &engine->dataset);
     KolDigit *digits[10];
@@ -375,6 +543,14 @@ int engine_tick(KolEngine *engine, const KolEvent *in, KolOutput *out) {
         strncpy(out->text, engine->last_text, sizeof(out->text) - 1);
         out->text[sizeof(out->text) - 1] = '\0';
     }
+    KolPersistState snapshot;
+    memset(&snapshot, 0, sizeof(snapshot));
+    snapshot.step = engine->step;
+    snapshot.metrics = engine->last;
+    snapshot.dataset_mean = engine->dataset_mean;
+    snapshot.dataset_min = engine->dataset_min;
+    snapshot.dataset_max = engine->dataset_max;
+    persist_save_state(&snapshot);
     return 0;
 }
 
