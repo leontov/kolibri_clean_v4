@@ -35,9 +35,44 @@ async function boot() {
   const LANGUAGE_PREFIX = 'Kolibri запомнил:';
   const LANGUAGE_DEFAULT_MESSAGE = 'Колибри пока молчит...';
 
-  document.getElementById('send').addEventListener('click', () => {
+  const sendBtn = document.getElementById('send');
+  let isSending = false;
+
+  async function handleSend() {
+    if (isSending) return;
     const txt = msgEl.value.trim();
     if (!txt) return;
+
+
+    isSending = true;
+    const originalText = sendBtn.textContent;
+    sendBtn.disabled = true;
+    sendBtn.textContent = 'Отправка…';
+
+    try {
+      const ptr = writeString(instance, txt);
+      wasm.kol_chat_push(ptr);
+      wasm.kol_free(ptr);
+      msgEl.value = '';
+      refreshHud();
+      refreshTail();
+    } finally {
+      sendBtn.disabled = false;
+      sendBtn.textContent = originalText;
+      isSending = false;
+    }
+  }
+
+  sendBtn.addEventListener('click', () => {
+    handleSend();
+  });
+
+  msgEl.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      handleSend();
+    }
+
     const ptr = writeString(instance, txt);
     wasm.kol_chat_push(ptr);
     wasm.kol_free(ptr);
@@ -45,6 +80,7 @@ async function boot() {
     refreshHud();
     refreshTail();
     refreshLanguageSummary();
+
   });
 
   document.getElementById('tick').addEventListener('click', () => {
