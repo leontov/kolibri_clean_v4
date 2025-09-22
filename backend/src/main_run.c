@@ -1,5 +1,6 @@
 #include "core.h"
 #include "chainio.h"
+#include "sync.h"
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -18,6 +19,9 @@ int main(int argc, char** argv){
     kolibri_config_t cfg; kolibri_load_config(&cfg, cfg_path);
 
     ensure_logs_dir();
+    if(!kolibri_sync_service_start(&cfg, "logs/chain.jsonl")){
+        fprintf(stderr, "[WARN] sync service unavailable\n");
+    }
     /* Config registry snapshot (Phase 2 roadmap item 95). */
     if(!kolibri_config_write_snapshot(&cfg, "logs/config_snapshot.json")){
         fprintf(stderr, "[WARN] unable to write config snapshot registry\n");
@@ -32,10 +36,13 @@ int main(int argc, char** argv){
         printf("[STEP %d] eff=%.4f compl=%.1f formula=%s hash=%s\n",
                step, b.eff, b.compl, b.formula, hash);
         strncpy(prev, hash, 65);
+        kolibri_sync_tick(&cfg, "logs/chain.jsonl");
     }
     if(!chain_verify("logs/chain.jsonl", stdout, &cfg)){
         fprintf(stderr, "self-check verification failed\n");
+        kolibri_sync_service_stop();
         return 1;
     }
+    kolibri_sync_service_stop();
     return 0;
 }

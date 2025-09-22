@@ -23,6 +23,7 @@
 | `backend/src/core.c` | Основной цикл оценки формул, генерация параметров, MSE/градиенты. |
 | `backend/src/dsl.c` | DSL выражений: сериализация, вычисление, градиенты. |
 | `backend/src/chainio.c` | Каноническая сериализация JSON, запись и чтение журналов. |
+| `backend/src/sync.c` | TCP-шина `SYNC/1`, обмен отпечатками и синхронизация блоков. |
 | `backend/src/main_run.c` | Точка входа `kolibri_run`, чтение конфигурации и запуск цикла. |
 | `backend/src/main_verify.c` | CLI `kolibri_verify` для проверки журналов. |
 | `backend/src/main_replay.c` | CLI `kolibri_replay` для воспроизведения сессий. |

@@ -1,6 +1,15 @@
 {
-  "depth": 3,
+  "steps": 30,
+  "depth_max": 2,
+  "depth_decay": 0.7,
+  "quorum": 0.6,
+  "temperature": 0.15,
+  "eff_threshold": 0.8,
+  "max_complexity": 32.0,
   "seed": 1337,
-  "maxFormulaDepth": 4,
-  "chainLimit": 256
+  "node_id": "kolibri-node-a",
+  "sync_enabled": 1,
+  "sync_listen_port": 9090,
+  "sync_peers": ["127.0.0.1:9091"],
+  "sync_trust_ratio": 0.5
 }
