@@ -15,6 +15,11 @@
         <div class="controls">
           <button id="send">Отправить</button>
           <button id="tick">Tick</button>
+          <button id="clear">Очистить историю</button>
+        </div>
+        <div class="history">
+          <h2>История сообщений</h2>
+          <ul id="history"></ul>
         </div>
       </section>
       <section class="panel status">
@@ -23,6 +28,8 @@
         <div class="metric">compl: <span id="compl">0.00</span></div>
         <h2>Цепочка</h2>
         <pre id="out"></pre>
+        <h2>Ответ</h2>
+        <pre id="response"></pre>
       </section>
     </main>
     <script src="./app.js" type="module"></script>
