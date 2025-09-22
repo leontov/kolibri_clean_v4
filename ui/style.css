@@ -57,6 +57,16 @@ button:hover {
   transform: translateY(-1px);
 }
 
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+  transform: none;
+}
+
+button:disabled:hover {
+  transform: none;
+}
+
 pre {
   max-height: 320px;
   overflow: auto;
@@ -68,4 +78,13 @@ pre {
 
 .metric {
   margin-bottom: 0.4rem;
+}
+
+.memory-output {
+  min-height: 3rem;
+  background: rgba(0, 0, 0, 0.35);
+  border-radius: 8px;
+  padding: 0.75rem;
+  font-size: 0.9rem;
+  white-space: pre-wrap;
 }
