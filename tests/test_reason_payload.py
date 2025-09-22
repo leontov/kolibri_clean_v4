@@ -20,6 +20,8 @@ def main() -> None:
         "parent",
         "seed",
         "config_fingerprint",
+        "origin_node",
+        "fmt",
         "formula",
         "eff",
         "compl",

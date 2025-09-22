@@ -21,12 +21,14 @@ int rb_payload_json(const ReasonBlock* b, char* buf, size_t n){
     char prev_esc[128]; esc(b->prev, prev_esc, sizeof(prev_esc));
     char merkle_esc[128]; esc(b->merkle, merkle_esc, sizeof(merkle_esc));
     char cfgfp_esc[128]; esc(b->config_fingerprint, cfgfp_esc, sizeof(cfgfp_esc));
+    char origin_esc[128]; esc(b->origin_node, origin_esc, sizeof(origin_esc));
     int off=0;
     off += snprintf(buf+off, n-off, "{\"step\":%llu,\"parent\":%llu,\"seed\":%llu,",
                     (unsigned long long)b->step,
                     (unsigned long long)b->parent,
                     (unsigned long long)b->seed);
     off += snprintf(buf+off, n-off, "\"config_fingerprint\":\"%s\",", cfgfp_esc);
+    off += snprintf(buf+off, n-off, "\"origin_node\":\"%s\",", origin_esc);
     off += snprintf(buf+off, n-off, "\"fmt\":\"%s\",\"formula\":\"%s\",", fmtesc, fesc);
     off += snprintf(buf+off, n-off, "\"param_count\":%d,\"params\":[", b->param_count);
     for(int i=0;i<b->param_count;i++){

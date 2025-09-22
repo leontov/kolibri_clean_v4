@@ -17,6 +17,7 @@ typedef struct {
     double bench_eff[10];
     char memory[256];
     char fmt[16];
+    char origin_node[64];
     char config_fingerprint[65];
     double eff, compl;
     char prev[65];

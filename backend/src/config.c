@@ -116,6 +116,15 @@ bool kolibri_load_config(kolibri_config_t* c, const char* json_path){
     c->hmac_salt[0] = 0;
     c->has_hmac_key = false;
     c->has_hmac_salt = false;
+    c->sync_enabled = false;
+    c->sync_listen_port = 0;
+    c->node_id[0] = 0;
+    c->peer_count = 0;
+    c->sync_trust_ratio = 0.5;
+    for(size_t i = 0; i < KOLIBRI_MAX_PEERS; ++i){
+        c->peers[i].host[0] = 0;
+        c->peers[i].port = 0;
+    }
 
     const char* env_key = getenv("KOLIBRI_HMAC_KEY");
     if(env_key && *env_key){
@@ -172,6 +181,71 @@ bool kolibri_load_config(kolibri_config_t* c, const char* json_path){
     GETU("\"seed\"", c->seed);
     get_json_string_field(p, "\"hmac_key\"", c->hmac_key, sizeof(c->hmac_key), &c->has_hmac_key);
     get_json_string_field(p, "\"hmac_salt\"", c->hmac_salt, sizeof(c->hmac_salt), &c->has_hmac_salt);
+    int sync_enabled_flag = 0;
+    GETI("\"sync_enabled\"", sync_enabled_flag);
+    c->sync_enabled = sync_enabled_flag != 0;
+    GETI("\"sync_listen_port\"", c->sync_listen_port);
+    get_json_string_field(p, "\"node_id\"", c->node_id, sizeof(c->node_id), NULL);
+    GETD("\"sync_trust_ratio\"", c->sync_trust_ratio);
+    if(c->sync_trust_ratio < 0.0){
+        c->sync_trust_ratio = 0.0;
+    }
+    if(c->sync_trust_ratio > 1.0){
+        c->sync_trust_ratio = 1.0;
+    }
+    const char* peers_key = "\"sync_peers\"";
+    char* peers_pos = strstr(p, peers_key);
+    if(peers_pos){
+        char* arr = strchr(peers_pos, '[');
+        if(arr){
+            arr++;
+            size_t count = 0;
+            while(*arr && *arr != ']' && count < KOLIBRI_MAX_PEERS){
+                while(*arr == ' ' || *arr == '\n' || *arr == '\t' || *arr == ','){
+                    arr++;
+                }
+                if(*arr != '"'){
+                    break;
+                }
+                arr++;
+                size_t j = 0;
+                char entry[128] = {0};
+                while(*arr && *arr != '"' && j + 1 < sizeof(entry)){
+                    if(*arr == '\\' && arr[1]){
+                        arr++;
+                    }
+                    entry[j++] = *arr++;
+                }
+                entry[j] = 0;
+                if(*arr == '"'){
+                    arr++;
+                }
+                while(*arr && *arr != ',' && *arr != ']'){
+                    arr++;
+                }
+                c->peers[count].host[0] = 0;
+                c->peers[count].port = 0;
+                if(entry[0]){
+                    char* colon = strchr(entry, ':');
+                    if(colon){
+                        *colon = 0;
+                        colon++;
+                        c->peers[count].port = atoi(colon);
+                    }
+                    strncpy(c->peers[count].host, entry, sizeof(c->peers[count].host) - 1);
+                    c->peers[count].host[sizeof(c->peers[count].host) - 1] = 0;
+                }
+                count++;
+                if(count >= KOLIBRI_MAX_PEERS){
+                    break;
+                }
+                if(*arr == ','){
+                    arr++;
+                }
+            }
+            c->peer_count = count;
+        }
+    }
     free(buf);
     refresh_fingerprint(c);
     return true;
@@ -207,4 +281,18 @@ const char* kolibri_config_hmac_key(const kolibri_config_t* cfg){
         return env_key;
     }
     return "insecure-key";
+}
+
+size_t kolibri_config_peer_count(const kolibri_config_t* cfg){
+    if(!cfg){
+        return 0;
+    }
+    return cfg->peer_count;
+}
+
+const kolibri_peer_t* kolibri_config_peer(const kolibri_config_t* cfg, size_t index){
+    if(!cfg || index >= cfg->peer_count){
+        return NULL;
+    }
+    return &cfg->peers[index];
 }
