@@ -48,6 +48,18 @@ int wasm_kol_tail_json(uint32_t buf_ptr, int cap, int n) {
     return kol_tail_json(wasm_ptr(buf_ptr), cap, n);
 }
 
+__attribute__((export_name("kol_emit_digits")))
+int wasm_kol_emit_digits(uint32_t buf_ptr, uint32_t max_len, uint32_t out_len_ptr) {
+    size_t out_len = 0;
+    int rc = kol_emit_digits((uint8_t *)wasm_ptr(buf_ptr), (size_t)max_len,
+                             out_len_ptr ? &out_len : NULL);
+    if (out_len_ptr) {
+        uint32_t *out = (uint32_t *)wasm_ptr(out_len_ptr);
+        *out = (uint32_t)out_len;
+    }
+    return rc;
+}
+
 __attribute__((export_name("kol_alloc")))
 uint32_t wasm_kol_alloc(uint32_t size) {
     void *ptr = kol_alloc((size_t)size);

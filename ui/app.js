@@ -30,6 +30,7 @@ async function boot() {
   const effEl = document.getElementById('eff');
   const complEl = document.getElementById('compl');
   const outEl = document.getElementById('out');
+  const digitsEl = document.getElementById('digits');
 
   document.getElementById('send').addEventListener('click', () => {
     const txt = msgEl.value.trim();
@@ -38,13 +39,12 @@ async function boot() {
     wasm.kol_chat_push(ptr);
     wasm.kol_free(ptr);
     msgEl.value = '';
-    refreshHud();
+    refreshAll();
   });
 
   document.getElementById('tick').addEventListener('click', () => {
     wasm.kol_tick();
-    refreshHud();
-    refreshTail();
+    refreshAll();
   });
 
   function refreshHud() {
@@ -61,8 +61,48 @@ async function boot() {
     outEl.textContent = json;
   }
 
-  refreshHud();
-  refreshTail();
+  function refreshDigits() {
+    const maxDigits = 128;
+    const digitsPtr = wasm.kol_alloc(maxDigits);
+    const lenPtr = wasm.kol_alloc(4);
+    let count = 0;
+
+    try {
+      const result = wasm.kol_emit_digits(digitsPtr, maxDigits, lenPtr);
+      if (result !== 0) {
+        digitsEl.textContent = '—';
+        return;
+      }
+
+      const lenView = new Uint32Array(wasm.memory.buffer, lenPtr, 1);
+      count = Math.min(lenView[0], maxDigits);
+      const digitsView = new Uint8Array(wasm.memory.buffer, digitsPtr, maxDigits);
+      const digits = Array.from(digitsView.subarray(0, count));
+
+      if (digits.length === 0) {
+        digitsEl.textContent = '—';
+        return;
+      }
+
+      digitsEl.innerHTML = digits
+        .map(
+          (digit, idx) =>
+            `<div class="digit-cell" style="--digit:${digit}"><span class="digit-value">${digit}</span><span class="digit-index">${idx}</span></div>`
+        )
+        .join('');
+    } finally {
+      wasm.kol_free(digitsPtr);
+      wasm.kol_free(lenPtr);
+    }
+  }
+
+  function refreshAll() {
+    refreshHud();
+    refreshTail();
+    refreshDigits();
+  }
+
+  refreshAll();
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./pwa/sw.js').catch(() => {});
