@@ -9,12 +9,14 @@
   </head>
   <body>
     <main>
+      <div id="loading" class="loading" role="status">Загрузка Kolibri...</div>
+      <div id="error" class="error" role="alert" aria-live="assertive"></div>
       <section class="panel chat">
         <h1>Kolibri ИИ</h1>
-        <textarea id="msg" placeholder="Введите сообщение..."></textarea>
+        <textarea id="msg" placeholder="Введите сообщение..." disabled></textarea>
         <div class="controls">
-          <button id="send">Отправить</button>
-          <button id="tick">Tick</button>
+          <button id="send" disabled>Отправить</button>
+          <button id="tick" disabled>Tick</button>
         </div>
       </section>
       <section class="panel status">

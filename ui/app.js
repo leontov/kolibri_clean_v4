@@ -2,10 +2,30 @@ const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
 async function loadWasm() {
-  const response = await fetch('./kolibri.wasm');
-  const buffer = await response.arrayBuffer();
-  const module = await WebAssembly.instantiate(buffer, {});
-  return module.instance;
+  let response;
+  try {
+    response = await fetch('./kolibri.wasm');
+  } catch (error) {
+    throw new Error(`Не удалось запросить kolibri.wasm: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  if (!response.ok) {
+    throw new Error(`Не удалось загрузить kolibri.wasm: статус ${response.status}`);
+  }
+
+  let buffer;
+  try {
+    buffer = await response.arrayBuffer();
+  } catch (error) {
+    throw new Error(`Не удалось прочитать kolibri.wasm: ${error instanceof Error ? error.message : String(error)}`);
+  }
+
+  try {
+    const module = await WebAssembly.instantiate(buffer, {});
+    return module.instance;
+  } catch (error) {
+    throw new Error(`Не удалось инициализировать WebAssembly: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 function writeString(wasm, text) {
@@ -22,16 +42,50 @@ function readString(wasm, ptr, len) {
 }
 
 async function boot() {
-  const instance = await loadWasm();
-  const wasm = instance.exports;
-  wasm.kol_init(3, 12345);
-
   const msgEl = document.getElementById('msg');
   const effEl = document.getElementById('eff');
   const complEl = document.getElementById('compl');
   const outEl = document.getElementById('out');
+  const sendEl = document.getElementById('send');
+  const tickEl = document.getElementById('tick');
+  const loadingEl = document.getElementById('loading');
+  const errorEl = document.getElementById('error');
 
-  document.getElementById('send').addEventListener('click', () => {
+  if (!msgEl || !effEl || !complEl || !outEl || !sendEl || !tickEl) {
+    const message = 'Не удалось инициализировать интерфейс: отсутствуют элементы управления.';
+    if (errorEl) {
+      errorEl.textContent = message;
+    }
+    throw new Error(message);
+  }
+
+  const toggleControls = (disabled) => {
+    if (msgEl) msgEl.disabled = disabled;
+    if (sendEl) sendEl.disabled = disabled;
+    if (tickEl) tickEl.disabled = disabled;
+  };
+
+  toggleControls(true);
+  if (loadingEl) loadingEl.hidden = false;
+
+  let instance;
+  try {
+    instance = await loadWasm();
+  } catch (error) {
+    if (loadingEl) loadingEl.textContent = 'Ошибка загрузки Kolibri';
+    if (errorEl) {
+      errorEl.textContent = error instanceof Error ? error.message : String(error);
+    }
+    throw error;
+  }
+
+  const wasm = instance.exports;
+  wasm.kol_init(3, 12345);
+
+  toggleControls(false);
+  if (loadingEl) loadingEl.hidden = true;
+
+  sendEl.addEventListener('click', () => {
     const txt = msgEl.value.trim();
     if (!txt) return;
     const ptr = writeString(instance, txt);
@@ -41,7 +95,7 @@ async function boot() {
     refreshHud();
   });
 
-  document.getElementById('tick').addEventListener('click', () => {
+  tickEl.addEventListener('click', () => {
     wasm.kol_tick();
     refreshHud();
     refreshTail();
@@ -69,4 +123,15 @@ async function boot() {
   }
 }
 
-boot();
+async function start() {
+  try {
+    await boot();
+  } catch (error) {
+    const errorEl = document.getElementById('error');
+    if (errorEl && !errorEl.textContent) {
+      errorEl.textContent = error instanceof Error ? error.message : String(error);
+    }
+  }
+}
+
+start();
