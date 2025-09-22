@@ -1,6 +1,15 @@
 {
   "source": "configs/kolibri.json",
   "loaded_from_file": true,
-  "config": {"depth_decay":0.69999999999999996,"depth_max":2,"eff_threshold":0.80000000000000004,"max_complexity":32,"quorum":0.59999999999999998,"seed":987654321,"steps":30,"temperature":0.14999999999999999},
-  "fingerprint": "283f1daf16500df57f0cc079fac0f051266630fc55dbccfc7cb4fb949e560901"
+  "config": {
+    "depth_decay": 0.7,
+    "depth_max": 3,
+    "eff_threshold": 0.8,
+    "max_complexity": 32,
+    "quorum": 0.6,
+    "seed": 987654321,
+    "steps": 32,
+    "temperature": 0.15
+  },
+  "fingerprint": "b547d1b1a1480595c35e097bdf64a69f84a527ace836925c21260201bc418938"
 }
