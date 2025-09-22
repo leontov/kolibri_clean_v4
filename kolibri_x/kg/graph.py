@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import json
 import math
+from pathlib import Path
 import re
 from dataclasses import dataclass, field, replace
 from typing import (
@@ -16,6 +18,7 @@ from typing import (
     Optional,
     Sequence,
     Tuple,
+    Union,
 )
 
 
@@ -61,6 +64,71 @@ class KnowledgeGraph:
         self._critics: Dict[str, Callable[[Node], float]] = {}
         self._authorities: Dict[str, Callable[[Node], object]] = {}
         self._pending_updates: Dict[str, Dict[str, object]] = {}
+
+    # ------------------------------------------------------------------
+    # Persistence helpers
+    # ------------------------------------------------------------------
+    def save(self, path: Union[str, Path]) -> None:
+        """Serialise the graph to a JSONL file."""
+
+        destination = Path(path)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+
+        with destination.open("w", encoding="utf-8") as handle:
+            handle.write(json.dumps({"kind": "meta", "version": 1}, ensure_ascii=False) + "\n")
+            for node in sorted(self.nodes(), key=lambda item: (item.memory, item.id)):
+                payload = {"kind": "node", "data": self._serialise_node(node)}
+                handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+            for edge in sorted(
+                self.edges(), key=lambda item: (item.memory, item.source, item.target, item.relation)
+            ):
+                payload = {"kind": "edge", "data": self._serialise_edge(edge)}
+                handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+            if self._pending_updates:
+                pending_payload = {
+                    node_id: self._normalise_json(changes)
+                    for node_id, changes in sorted(self._pending_updates.items())
+                }
+                payload = {"kind": "pending", "data": pending_payload}
+                handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
+
+    def load(self, path: Union[str, Path]) -> bool:
+        """Load a graph snapshot from a JSONL file."""
+
+        source = Path(path)
+        if not source.exists():
+            return False
+
+        self._operational_nodes = {}
+        self._long_term_nodes = {}
+        self._operational_edges = []
+        self._long_term_edges = []
+        self._pending_updates = {}
+
+        with source.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                record = line.strip()
+                if not record:
+                    continue
+                try:
+                    payload = json.loads(record)
+                except json.JSONDecodeError:
+                    continue
+                kind = payload.get("kind")
+                data = payload.get("data", {})
+                if kind == "node" and isinstance(data, Mapping):
+                    node = self._node_from_payload(data)
+                    self._node_store(node.memory)[node.id] = node
+                elif kind == "edge" and isinstance(data, Mapping):
+                    edge = self._edge_from_payload(data)
+                    self._edge_store(edge.memory).append(edge)
+                elif kind == "pending" and isinstance(data, Mapping):
+                    pending: Dict[str, Dict[str, object]] = {}
+                    for node_id, changes in data.items():
+                        if isinstance(changes, Mapping):
+                            pending[str(node_id)] = self._normalise_loaded_mapping(changes)
+                    self._pending_updates.update(pending)
+        return True
 
     # ------------------------------------------------------------------
     # Memory management
@@ -308,6 +376,90 @@ class KnowledgeGraph:
     # ------------------------------------------------------------------
     # Internal utilities
     # ------------------------------------------------------------------
+    def _serialise_node(self, node: Node) -> Mapping[str, object]:
+        return {
+            "id": node.id,
+            "type": node.type,
+            "text": node.text,
+            "sources": list(node.sources),
+            "confidence": float(node.confidence),
+            "embedding": [float(value) for value in node.embedding],
+            "metadata": self._normalise_json(node.metadata),
+            "memory": node.memory,
+        }
+
+    def _serialise_edge(self, edge: Edge) -> Mapping[str, object]:
+        return {
+            "source": edge.source,
+            "target": edge.target,
+            "relation": edge.relation,
+            "weight": float(edge.weight),
+            "memory": edge.memory,
+            "metadata": self._normalise_json(edge.metadata),
+        }
+
+    def _node_from_payload(self, payload: Mapping[str, object]) -> Node:
+        metadata_raw = payload.get("metadata", {})
+        metadata = (
+            self._normalise_loaded_mapping(metadata_raw)
+            if isinstance(metadata_raw, Mapping)
+            else {}
+        )
+        sources = payload.get("sources", [])
+        embedding = payload.get("embedding", [])
+        sources_iterable = isinstance(sources, Iterable) and not isinstance(sources, (str, bytes))
+        embedding_iterable = isinstance(embedding, Iterable) and not isinstance(embedding, (str, bytes))
+        memory_raw = payload.get("memory")
+        memory = self._normalise_memory(memory_raw if isinstance(memory_raw, str) else None)
+        return Node(
+            id=str(payload.get("id")),
+            type=str(payload.get("type", "")),
+            text=str(payload.get("text", "")),
+            sources=tuple(str(item) for item in sources) if sources_iterable else tuple(),
+            confidence=float(payload.get("confidence", 0.5)),
+            embedding=tuple(float(item) for item in embedding) if embedding_iterable else tuple(),
+            metadata=metadata,
+            memory=memory,
+        )
+
+    def _edge_from_payload(self, payload: Mapping[str, object]) -> Edge:
+        metadata_raw = payload.get("metadata", {})
+        metadata = (
+            self._normalise_loaded_mapping(metadata_raw)
+            if isinstance(metadata_raw, Mapping)
+            else {}
+        )
+        memory_raw = payload.get("memory")
+        memory = self._normalise_memory(memory_raw if isinstance(memory_raw, str) else None)
+        return Edge(
+            source=str(payload.get("source")),
+            target=str(payload.get("target")),
+            relation=str(payload.get("relation", "")),
+            weight=float(payload.get("weight", 1.0)),
+            memory=memory,
+            metadata=metadata,
+        )
+
+    @staticmethod
+    def _normalise_json(value: object) -> object:
+        if isinstance(value, Mapping):
+            return {str(key): KnowledgeGraph._normalise_json(val) for key, val in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [KnowledgeGraph._normalise_json(item) for item in value]
+        if isinstance(value, set):
+            return sorted(KnowledgeGraph._normalise_json(item) for item in value)
+        return value
+
+    def _normalise_loaded_mapping(self, payload: Mapping[str, object]) -> Dict[str, object]:
+        return {str(key): self._normalise_loaded_value(value) for key, value in payload.items()}
+
+    def _normalise_loaded_value(self, value: object) -> object:
+        if isinstance(value, Mapping):
+            return {str(key): self._normalise_loaded_value(val) for key, val in value.items()}
+        if isinstance(value, list):
+            return [self._normalise_loaded_value(item) for item in value]
+        return value
+
     def _normalise_memory(self, memory: Optional[str]) -> str:
         if not memory:
             return "operational"

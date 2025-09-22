@@ -3,10 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+from pathlib import Path
 from collections.abc import Iterable as IterableABC
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple
+from typing import Callable, Dict, Iterable, List, Mapping, MutableMapping, Optional, Sequence, Tuple, Union
 
 from kolibri_x.core.encoders import (
     ASREncoder,
@@ -170,12 +171,76 @@ class KolibriRuntime:
         self.alignment_engine = alignment_engine or TemporalAlignmentEngine()
         self.self_learner = self_learner
 
+        self._active_session_id: Optional[str] = None
+        self._graph_store_path: Optional[Path] = None
+
         skills = self.skill_store.list()
         if skills:
             self.planner.register_skills(skills)
 
         if self.iot_bridge and self.iot_bridge.journal is None:
             self.iot_bridge.journal = self.journal
+
+    # ------------------------------------------------------------------
+    # Session lifecycle
+    # ------------------------------------------------------------------
+    def start_session(self, session_id: str, *, graph_path: Optional[Union[str, Path]] = None) -> None:
+        """Initialise a runtime session and load graph state if available."""
+
+        if self._active_session_id and self._active_session_id != session_id:
+            self.end_session()
+
+        path = Path(graph_path) if graph_path is not None else self._graph_store_path
+        if path is None:
+            path = Path(f"{session_id}.kg.jsonl")
+        self._graph_store_path = path
+
+        loaded = False
+        if path.exists():
+            loaded = self.graph.load(path)
+        else:
+            path.parent.mkdir(parents=True, exist_ok=True)
+
+        self._active_session_id = session_id
+        self.journal.append(
+            "session_started",
+            {
+                "session_id": session_id,
+                "graph_path": str(path),
+                "graph_loaded": bool(loaded),
+                "node_count": len(self.graph.nodes()),
+                "edge_count": len(self.graph.edges()),
+            },
+        )
+
+    def end_session(self) -> None:
+        """Persist graph state and tear down the active session."""
+
+        if not self._active_session_id:
+            return
+
+        session_id = self._active_session_id
+        path = self._graph_store_path
+        saved = False
+        if path is not None:
+            self.graph.save(path)
+            saved = True
+
+        if self.iot_bridge:
+            self.iot_bridge.reset_session(session_id)
+
+        self.journal.append(
+            "session_finished",
+            {
+                "session_id": session_id,
+                "graph_path": str(path) if path else None,
+                "graph_saved": saved,
+                "node_count": len(self.graph.nodes()),
+                "edge_count": len(self.graph.edges()),
+            },
+        )
+
+        self._active_session_id = None
 
     def process(self, request: RuntimeRequest) -> RuntimeResponse:
         reasoning = ReasoningLog()
