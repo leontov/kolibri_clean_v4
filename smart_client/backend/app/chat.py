@@ -1,49 +1,231 @@
+from __future__ import annotations
+
 import asyncio
-from typing import Any, AsyncGenerator, Dict, List
-from collections import defaultdict
+import re
+from typing import Any, Dict, List, Optional
+
+from .audit import audit_logger
+from .memory import ChatSession, SessionManager
+from .tools import execute_tool
+
 
 class ChatOrchestrator:
-    """
-    Минимальный рабочий оркестратор чата:
-    - chat(message, session_id) -> dict с ответом
-    - stream(session_id) -> AsyncGenerator для SSE
-    - history(session_id) -> список сообщений
-    Совместим с app.main эндпоинтами.
-    """
+    def __init__(self, session_manager: SessionManager):
+        self.sessions = session_manager
 
-    def __init__(self) -> None:
-        self._history: Dict[str, List[Dict[str, str]]] = defaultdict(list)
+    async def handle_message(self, session_id: str, message: str) -> None:
+        session = self.sessions.get_session(session_id)
+        session.add_message("user", message)
+        await session.publish("token", {"content": ""})  # trigger client to start display
+        sources: List[Dict[str, Any]] = []
+        math_result: Optional[Dict[str, Any]] = None
 
-    async def chat(self, message: str, session_id: str) -> Dict[str, Any]:
-        reply = self._simple_reply(message)
-        self._history[session_id].append({"role": "user", "content": message})
-        self._history[session_id].append({"role": "assistant", "content": reply})
-        return {"reply": reply}
+        if "миссия" in message.lower():
+            plan = execute_tool(
+                "mission_plan",
+                {"goal": message, "constraints": "по запросу", "deadline": "гибкий"},
+            )
+            await session.publish("tool_call", {"name": "mission_plan", "result": plan})
 
-    async def stream(self, session_id: str) -> AsyncGenerator[dict, None]:
-        """
-        SSE-стрим: отдаём токены последнего ответа ассистента.
-        EventSourceResponse в app.main умеет потреблять такой генератор.
-        """
-        last_reply = ""
-        hist = self._history.get(session_id, [])
-        if hist and hist[-1]["role"] == "assistant":
-            last_reply = hist[-1]["content"]
+        if any(keyword in message.lower() for keyword in ["что", "как", "источник", "kolibri"]):
+            kg_result = execute_tool("kg_search", {"query": message, "top_k": 3})
+            sources = kg_result["results"]
+            await session.publish(
+                "tool_call",
+                {"name": "kg_search", "payload": {"query": message, "hits": sources}},
+            )
 
-        if not last_reply:
-            last_reply = "Нет данных для стрима — сначала отправь сообщение."
+        if self._looks_like_math(message):
+            try:
+                math_result = execute_tool("math_solver", {"problem": message})
+            except Exception as exc:  # noqa: BLE001
+                math_result = {
+                    "type": "error",
+                    "summary": "Не удалось решить задачу.",
+                    "answer": str(exc),
+                    "steps": [],
+                    "references": [],
+                }
+                await session.publish(
+                    "tool_call",
+                    {
+                        "name": "math_solver",
+                        "payload": {"error": str(exc)},
+                    },
+                )
+            else:
+                await session.publish(
+                    "tool_call",
+                    {
+                        "name": "math_solver",
+                        "payload": math_result,
+                    },
+                )
+                for reference in math_result.get("references", []):
 
-        for token in last_reply.split():
-            # формат совместим со sse_starlette: словарь с ключом "data"
-            yield {"event": "token", "data": token + " "}
-            await asyncio.sleep(0.02)
+                    sources.append({"source": reference, "score": 1.0})
 
-        # финальный маркер завершения
-        yield {"event": "done", "data": ""}
+                    sources.append({"text": reference, "source": "math_solver", "score": 1.0})
 
-    def history(self, session_id: str) -> List[Dict[str, str]]:
-        return list(self._history.get(session_id, []))
 
-    def _simple_reply(self, message: str) -> str:
-        # Плейсхолдер логики. Здесь можно подключить твой Kolibri-ядро/агентов.
-        return f"Колибри: я услышал — {message}"
+        run_block = execute_tool("kolibri_run", {"steps": 3, "seed": len(message)})
+        await session.publish(
+            "tool_call",
+            {"name": "kolibri_run", "payload": run_block["block"]},
+        )
+
+        short_answer = self._compose_short_answer(message, sources, math_result)
+
+        explanation = self._compose_explanation(message, sources, math_result)
+        next_steps = self._compose_next_steps(message, sources, math_result)
+
+        explanation = self._compose_explanation(sources, math_result)
+        next_steps = self._compose_next_steps(sources, math_result)
+
+        math_section = self._format_math_result(math_result)
+
+        full_response = f"{short_answer}\n\nКак это узнали: {explanation}\n\nЧто дальше: {next_steps}"
+        if math_section:
+            full_response += f"\n\nМатематика: {math_section}"
+        if sources:
+            full_response += "\n\nИсточники:" + "".join(
+                f"\n• {item['source']}"
+                for item in sources
+            )
+        else:
+            full_response += "\n\nКак проверили: внутренний запуск kolibri_run показал стабильный результат."
+
+        session.add_message("assistant", full_response, sources=sources, math=math_result)
+        await self._stream_text(session, full_response)
+        audit_logger.log(
+            "assistant",
+            "chat_response",
+            {"session_id": session_id, "sources": sources, "length": len(full_response)},
+        )
+
+    async def _stream_text(self, session: ChatSession, text: str) -> None:
+        tokens = text.split()
+        for token in tokens:
+            await session.publish("token", {"content": token + " "})
+            await asyncio.sleep(0.05)
+        await session.publish("final", {"content": text})
+
+    def _compose_short_answer(
+        self,
+        message: str,
+        sources: List[Dict[str, Any]],
+        math_result: Optional[Dict[str, Any]],
+    ) -> str:
+
+        lowered = message.lower()
+        if self._looks_like_greeting(message):
+            return (
+                "Привет! Я Kolibri Smart Client: помогу спланировать миссии и решу задачи по алгебре и геометрии."
+            )
+        if "не знаю" in lowered:
+
+        if "не знаю" in message.lower():
+
+            return "Пока данных маловато, но я могу поискать больше сведений."
+        if math_result and math_result.get("answer"):
+            return f"Решение найдено: {math_result['answer']}"
+        if sources:
+            return "Главная мысль: сведения подтверждаются локальным графом знаний."
+        return "Я сохранил запрос и готов уточнить детали."
+
+    def _compose_explanation(
+        self,
+
+        message: str,
+
+
+        sources: List[Dict[str, Any]],
+        math_result: Optional[Dict[str, Any]],
+    ) -> str:
+        if math_result and math_result.get("summary"):
+            return math_result["summary"]
+        if sources:
+            top = sources[0]
+            return f"опирался на запись из {top['source']} и свежий kolibri_run"
+        if self._looks_like_greeting(message):
+            return "использую встроенные подсказки Kolibri и инструменты вроде math_solver и kolibri_run"
+        return "использовал внутреннюю проверку kolibri_run без внешних источников"
+
+    def _compose_next_steps(
+        self,
+
+        message: str,
+        sources: List[Dict[str, Any]],
+        math_result: Optional[Dict[str, Any]],
+    ) -> str:
+        if self._looks_like_greeting(message):
+            steps = [
+                "сформулировать задачу или уравнение — я решу и поясню шаги",
+                "подсказать миссию или действие для оркестратора",
+                "при необходимости запустить kolibri_run или verify",
+            ]
+            return ", ".join(steps)
+
+
+        sources: List[Dict[str, Any]],
+        math_result: Optional[Dict[str, Any]],
+    ) -> str:
+
+        steps = ["уточнить критерии успеха", "обновить миссию в Ledger"]
+        if sources:
+            steps.insert(0, "изучить отмеченные источники")
+        if math_result and math_result.get("type") == "equation":
+            steps.insert(0, "подставить решение в исходное уравнение для проверки")
+        return ", ".join(steps)
+
+    def _format_math_result(self, math_result: Optional[Dict[str, Any]]) -> str:
+        if not math_result:
+            return ""
+        if math_result.get("type") == "error":
+            return math_result.get("summary", "")
+        parts = [math_result.get("summary", "")]
+        answer = math_result.get("answer")
+        if answer:
+            parts.append(f"Итог: {answer}")
+        steps = math_result.get("steps") or []
+        if steps:
+            steps_lines = "\n".join(f"• {step}" for step in steps)
+            parts.append(f"Шаги:\n{steps_lines}")
+        return "\n".join(filter(None, parts))
+
+    def _looks_like_math(self, message: str) -> bool:
+        lowered = message.lower()
+        math_keywords = [
+            "реши",
+            "уравнение",
+            "площадь",
+            "периметр",
+            "радиус",
+            "диаметр",
+            "длина",
+            "формула",
+            "sin",
+            "cos",
+            "tan",
+            "sqrt",
+        ]
+        if any(keyword in lowered for keyword in math_keywords):
+            return True
+        return bool(re.search(r"[0-9].*[=+\-*/^]", message))
+
+
+    def _looks_like_greeting(self, message: str) -> bool:
+        lowered = message.lower()
+        greeting_keywords = [
+            "привет",
+            "здравств",
+            "hello",
+            "hi",
+            "добрый день",
+            "hey",
+        ]
+        return any(keyword in lowered for keyword in greeting_keywords)
+
+
+
+__all__ = ["ChatOrchestrator"]
