@@ -8,6 +8,141 @@
 #include "digit.h"
 #include "persist.h"
 
+typedef struct {
+    uint32_t codepoint;
+    uint32_t count;
+} KolCodepointFreq;
+
+static uint32_t kol_hash32(uint32_t value) {
+    value ^= value >> 16;
+    value *= 0x7feb352dU;
+    value ^= value >> 15;
+    value *= 0x846ca68bU;
+    value ^= value >> 16;
+    return value;
+}
+
+static uint8_t collapse_to_digit(uint32_t value) {
+    return (uint8_t)(value % 10u);
+}
+
+static size_t engine_utf8_decode(const unsigned char *src, uint32_t *out_cp) {
+    if (!src || !src[0]) {
+        return 0u;
+    }
+    unsigned char c0 = src[0];
+    if (c0 < 0x80u) {
+        *out_cp = (uint32_t)c0;
+        return 1u;
+    }
+    if ((c0 & 0xE0u) == 0xC0u) {
+        unsigned char c1 = src[1];
+        if ((c1 & 0xC0u) != 0x80u) {
+            *out_cp = (uint32_t)c0;
+            return 1u;
+        }
+        *out_cp = ((uint32_t)(c0 & 0x1Fu) << 6u) | (uint32_t)(c1 & 0x3Fu);
+        return 2u;
+    }
+    if ((c0 & 0xF0u) == 0xE0u) {
+        unsigned char c1 = src[1];
+        unsigned char c2 = src[2];
+        if ((c1 & 0xC0u) != 0x80u || (c2 & 0xC0u) != 0x80u) {
+            *out_cp = (uint32_t)c0;
+            return 1u;
+        }
+        *out_cp = ((uint32_t)(c0 & 0x0Fu) << 12u) | ((uint32_t)(c1 & 0x3Fu) << 6u) |
+                  (uint32_t)(c2 & 0x3Fu);
+        return 3u;
+    }
+    if ((c0 & 0xF8u) == 0xF0u) {
+        unsigned char c1 = src[1];
+        unsigned char c2 = src[2];
+        unsigned char c3 = src[3];
+        if ((c1 & 0xC0u) != 0x80u || (c2 & 0xC0u) != 0x80u || (c3 & 0xC0u) != 0x80u) {
+            *out_cp = (uint32_t)c0;
+            return 1u;
+        }
+        *out_cp = ((uint32_t)(c0 & 0x07u) << 18u) | ((uint32_t)(c1 & 0x3Fu) << 12u) |
+                  ((uint32_t)(c2 & 0x3Fu) << 6u) | (uint32_t)(c3 & 0x3Fu);
+        return 4u;
+    }
+    *out_cp = (uint32_t)c0;
+    return 1u;
+}
+
+static size_t encode_utf8_digits(const char *utf8, uint8_t *digits, size_t capacity,
+                                 uint8_t *out_stride) {
+    if (!utf8 || !digits || capacity == 0u) {
+        if (out_stride) {
+            *out_stride = 0u;
+        }
+        return 0u;
+    }
+    const size_t stride = 4u;
+    KolCodepointFreq freq_table[64];
+    size_t           freq_count = 0u;
+    memset(freq_table, 0, sizeof(freq_table));
+    const unsigned char *ptr = (const unsigned char *)utf8;
+    size_t               idx = 0u;
+    size_t               position = 0u;
+    while (*ptr && idx + stride <= capacity) {
+        uint32_t cp = 0u;
+        size_t   adv = engine_utf8_decode(ptr, &cp);
+        if (adv == 0u) {
+            break;
+        }
+        size_t entry_index = 0u;
+        int    found = 0;
+        for (; entry_index < freq_count; ++entry_index) {
+            if (freq_table[entry_index].codepoint == cp) {
+                found = 1;
+                break;
+            }
+        }
+        if (!found) {
+            if (freq_count < sizeof(freq_table) / sizeof(freq_table[0])) {
+                entry_index = freq_count++;
+            } else {
+                size_t weakest = 0u;
+                uint32_t weakest_count = freq_table[0].count;
+                for (size_t i = 1u; i < freq_count; ++i) {
+                    if (freq_table[i].count < weakest_count) {
+                        weakest = i;
+                        weakest_count = freq_table[i].count;
+                    }
+                }
+                entry_index = weakest;
+            }
+            freq_table[entry_index].codepoint = cp;
+            freq_table[entry_index].count = 0u;
+        }
+        freq_table[entry_index].count += 1u;
+        uint32_t freq = freq_table[entry_index].count;
+        uint32_t hash = kol_hash32(cp);
+        uint32_t freq_hash = kol_hash32(freq);
+        uint32_t order_hash = kol_hash32((uint32_t)(position + 1u));
+        uint8_t freq_low = collapse_to_digit(freq);
+        uint8_t freq_mix = collapse_to_digit(freq / 10u + (uint32_t)(position % 10u) + freq_hash);
+        uint8_t id_primary = collapse_to_digit(hash ^ order_hash);
+        uint8_t id_trail =
+            collapse_to_digit((hash >> 8u) + (freq_hash >> 11u) + order_hash + (uint32_t)position);
+        digits[idx++] = freq_low;
+        digits[idx++] = freq_mix;
+        digits[idx++] = id_primary;
+        digits[idx++] = id_trail;
+        ptr += adv;
+        position += 1u;
+    }
+    if (out_stride) {
+        *out_stride = (idx > 0u) ? (uint8_t)stride : 0u;
+    }
+    if (idx < capacity) {
+        memset(digits + idx, 0, capacity - idx);
+    }
+    return idx;
+}
+
 static void init_dataset(KolEngine *engine) {
     size_t n = sizeof(engine->xs) / sizeof(engine->xs[0]);
     for (size_t i = 0; i < n; ++i) {
@@ -247,14 +382,15 @@ int engine_ingest_text(KolEngine *engine, const char *utf8, KolEvent *out_event)
     if (!out_event || !utf8) {
         return -1;
     }
-    uint8_t digits[sizeof(out_event->digits)];
-    size_t len = 0;
-    size_t capacity = sizeof(digits) / sizeof(digits[0]);
-    while (utf8[len] && len < capacity) {
-        digits[len] = (uint8_t)(((unsigned char)utf8[len]) % 10u);
-        ++len;
+    memset(out_event->digits, 0, sizeof(out_event->digits));
+    size_t produced = encode_utf8_digits(utf8, out_event->digits,
+                                         sizeof(out_event->digits) / sizeof(out_event->digits[0]),
+                                         &out_event->stride);
+    out_event->length = produced;
+    if (produced == 0) {
+        out_event->stride = 0;
     }
-    return engine_ingest_digits(engine, digits, len, out_event);
+    return 0;
 }
 
 int engine_ingest_digits(KolEngine *engine, const uint8_t *digits, size_t len, KolEvent *out_event) {
@@ -269,6 +405,7 @@ int engine_ingest_digits(KolEngine *engine, const uint8_t *digits, size_t len, K
         out_event->digits[i] = (uint8_t)(digits[i] % 10u);
     }
     out_event->length = count;
+    out_event->stride = count > 0 ? 1u : 0u;
     return 0;
 }
 
@@ -280,13 +417,15 @@ int engine_ingest_bytes(KolEngine *engine, const uint8_t *bytes, size_t len, Kol
     size_t capacity = sizeof(out_event->digits) / sizeof(out_event->digits[0]);
     size_t idx = 0;
     memset(out_event->digits, 0, sizeof(out_event->digits));
-    for (size_t i = 0; i < len && idx + 3 <= capacity; ++i) {
+    const size_t stride = 3u;
+    for (size_t i = 0; i < len && idx + stride <= capacity; ++i) {
         uint8_t value = bytes[i];
         out_event->digits[idx++] = (uint8_t)((value / 100u) % 10u);
         out_event->digits[idx++] = (uint8_t)((value / 10u) % 10u);
         out_event->digits[idx++] = (uint8_t)(value % 10u);
     }
     out_event->length = idx;
+    out_event->stride = idx > 0 ? (uint8_t)stride : 0u;
     return 0;
 }
 
@@ -316,6 +455,7 @@ int engine_ingest_signal(KolEngine *engine, const float *samples, size_t len, Ko
         out_event->digits[i] = (uint8_t)scaled;
     }
     out_event->length = count;
+    out_event->stride = count > 0 ? 1u : 0u;
     return 0;
 }
 
