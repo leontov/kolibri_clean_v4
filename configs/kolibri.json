@@ -11,5 +11,9 @@
   "sync_enabled": 1,
   "sync_listen_port": 9090,
   "sync_peers": ["127.0.0.1:9091"],
-  "sync_trust_ratio": 0.5
+  "sync_trust_ratio": 0.5,
+  "rag_cache_min_hit_rate": 0.3,
+  "rag_cache_max_miss_rate": 0.95,
+  "rag_cache_max_entries": 512,
+  "rag_cache_min_observations": 15
 }
