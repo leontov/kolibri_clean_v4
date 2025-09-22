@@ -1,10 +1,13 @@
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "../core/kolibri.h"
+#include "../core/persist.h"
 
 int main(void) {
+    remove(persist_chain_path());
     if (kol_init(3, 2024) != 0) {
         fprintf(stderr, "kol_init failed\n");
         return 1;
@@ -43,6 +46,30 @@ int main(void) {
     char buf[2048];
     int len = kol_tail_json(buf, (int)sizeof(buf), 3);
     assert(len >= 0);
+    kol_reset();
+
+    /* reproducibility check */
+    remove(persist_chain_path());
+    assert(kol_init(4, 999) == 0);
+    assert(kol_tick() == 0);
+    uint8_t first_digits[128];
+    size_t  first_len = 0;
+    assert(kol_emit_digits(first_digits, sizeof(first_digits), &first_len) == 0);
+    double first_eff = kol_eff();
+    double first_compl = kol_compl();
+    kol_reset();
+    remove(persist_chain_path());
+    assert(kol_init(4, 999) == 0);
+    assert(kol_tick() == 0);
+    uint8_t second_digits[128];
+    size_t  second_len = 0;
+    assert(kol_emit_digits(second_digits, sizeof(second_digits), &second_len) == 0);
+    double second_eff = kol_eff();
+    double second_compl = kol_compl();
+    assert(first_len == second_len);
+    assert(memcmp(first_digits, second_digits, first_len) == 0);
+    assert(fabs(first_eff - second_eff) < 1e-9);
+    assert(fabs(first_compl - second_compl) < 1e-9);
     kol_reset();
     printf("core test ok\n");
     return 0;

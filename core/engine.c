@@ -214,6 +214,7 @@ int engine_tick(KolEngine *engine, const KolEvent *in, KolOutput *out) {
         strncpy(block.formula, formula_str, sizeof(block.formula) - 1);
         block.formula[sizeof(block.formula) - 1] = '\0';
         free(formula_str);
+        persist_quantize_formula(block.formula, sizeof(block.formula));
     }
     block.eff = engine->last.eff;
     block.compl = engine->last.compl;
