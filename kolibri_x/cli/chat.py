@@ -18,7 +18,7 @@ from kolibri_x.runtime.orchestrator import (
     SkillExecution,
     SkillSandbox,
 )
-from kolibri_x.skills.store import SkillManifest, SkillStore
+from kolibri_x.skills.store import SkillManifest, SkillManifestValidationError, SkillStore
 
 CHAT_SKILL_NAME = "chat_responder"
 DEFAULT_USER_ID = "cli-user"
@@ -184,6 +184,31 @@ def _ingest_paths(runtime: KolibriRuntime, paths: Sequence[str]) -> None:
             )
 
 
+def _validate_manifest_directory(path: Path) -> None:
+    target = path.expanduser().resolve()
+    if not target.exists() or not target.is_dir():
+        raise SystemExit(f"[validate] директория манифестов не найдена: {path}")
+
+    manifest_files = sorted(p for p in target.rglob("*.json") if p.is_file())
+    if not manifest_files:
+        print(f"[validate] в {target} не найдено файлов *.json")
+        return
+
+    errors: List[tuple[Path, Exception]] = []
+    for manifest_path in manifest_files:
+        try:
+            SkillStore.load_from_file(manifest_path)
+        except (OSError, json.JSONDecodeError, SkillManifestValidationError) as exc:
+            errors.append((manifest_path, exc))
+
+    if errors:
+        for manifest_path, exc in errors:
+            print(f"[validate] {manifest_path}: {exc}")
+        raise SystemExit(1)
+
+    print(f"[validate] успешно проверено {len(manifest_files)} манифестов в {target}")
+
+
 def main(argv: Optional[Sequence[str]] = None) -> None:
     parser = argparse.ArgumentParser(description="Chat with KolibriRuntime")
     parser.add_argument("--user-id", default=DEFAULT_USER_ID, help="identifier for the chat user")
@@ -200,7 +225,15 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
         default=5,
         help="number of journal entries to display in responses",
     )
+    parser.add_argument(
+        "--validate-manifests",
+        metavar="PATH",
+        help="validate all manifest files in the given directory before starting",
+    )
     args = parser.parse_args(argv)
+
+    if args.validate_manifests:
+        _validate_manifest_directory(Path(args.validate_manifests))
 
     runtime = build_runtime(user_id=args.user_id)
     session = ChatSession(runtime=runtime, user_id=args.user_id, journal_tail=max(1, args.journal_tail))

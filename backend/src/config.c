@@ -100,8 +100,8 @@ static void get_json_string_field(
 }
 
 bool kolibri_load_config(kolibri_config_t* c, const char* json_path){
-    c->steps = 30;
-    c->depth_max = 2;
+    c->steps = 32;
+    c->depth_max = 3;
     c->depth_decay = 0.7;
     c->quorum = 0.6;
     c->temperature = 0.15;

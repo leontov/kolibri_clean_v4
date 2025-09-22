@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timedelta, timezone
 import sys
 from pathlib import Path
-from typing import Mapping
+from typing import Dict, List, Mapping
 
 import pytest
 
@@ -52,7 +52,12 @@ from kolibri_x.runtime.journal import ActionJournal  # noqa: E402
 from kolibri_x.runtime.orchestrator import KolibriRuntime, RuntimeRequest, SkillSandbox  # noqa: E402
 from kolibri_x.runtime.self_learning import BackgroundSelfLearner  # noqa: E402
 from kolibri_x.runtime.workflow import ReminderRule, WorkflowManager  # noqa: E402
-from kolibri_x.skills.store import SkillManifest, SkillPolicyViolation, SkillStore  # noqa: E402
+from kolibri_x.skills.store import (  # noqa: E402
+    SkillManifest,
+    SkillManifestValidationError,
+    SkillPolicyViolation,
+    SkillStore,
+)
 from kolibri_x.xai.panel import ExplanationPanel  # noqa: E402
 from kolibri_x.xai.reasoning import ReasoningLog  # noqa: E402
 
@@ -98,6 +103,53 @@ def skill_store() -> SkillStore:
     )
     store.register(manifest)
     return store
+
+
+def test_skill_manifest_schema_validation() -> None:
+    with pytest.raises(SkillManifestValidationError):
+        SkillManifest.from_dict(
+            {
+                "name": "invalid",
+                "version": "1.0",
+                "inputs": ["text"],
+                "permissions": ["net.read:whitelist"],
+                "billing": "per_call",
+                "policy": {},
+                "entry": "invalid.py",
+            }
+        )
+
+    with pytest.raises(SkillManifestValidationError):
+        SkillManifest.from_dict(
+            {
+                "name": "invalid",
+                "version": "1.0.0",
+                "inputs": ["text"],
+                "permissions": ["net.read:whitelist"],
+                "billing": "per_call",
+                "policy": {},
+                "entry": "../escape.py",
+            }
+        )
+
+
+def test_skill_store_register_logs_rejection() -> None:
+    store = SkillStore()
+    invalid_manifest = SkillManifest(
+        name="bad-skill",
+        version="1.0.0",
+        inputs=("text",),
+        permissions=("bad-scope",),
+        billing="per_call",
+        policy={},
+        entry="bad.py",
+    )
+
+    with pytest.raises(SkillManifestValidationError):
+        store.register(invalid_manifest)
+
+    journal_events = list(store.journal.entries())
+    assert any(event.event == "skill_manifest.rejected" for event in journal_events)
 
 
 def _bootstrap_runtime(
@@ -155,6 +207,30 @@ def test_rag_pipeline_returns_supported_answer(knowledge_graph: KnowledgeGraph) 
     assert answer["verification"]["status"] in {"ok", "partial", "conflict"}
     assert "Answering" in answer["summary"]
     assert reasoning.steps(), "reasoning log should not be empty"
+
+
+def test_rag_pipeline_reuses_cached_embeddings(knowledge_graph: KnowledgeGraph) -> None:
+    class CountingEncoder(TextEncoder):
+        def __init__(self, dim: int = 16) -> None:
+            super().__init__(dim=dim)
+            self.calls: Dict[str, int] = {}
+
+        def encode(self, text: str) -> List[float]:
+            self.calls[text] = self.calls.get(text, 0) + 1
+            return super().encode(text)
+
+    encoder = CountingEncoder(dim=16)
+    pipeline = RAGPipeline(knowledge_graph, encoder=encoder)
+
+    node_texts = [node.text for node in knowledge_graph.nodes() if node.text]
+    for text in node_texts:
+        assert encoder.calls.get(text, 0) == 1
+
+    pipeline.retrieve("Explain autonomy", top_k=2)
+    pipeline.retrieve("Explain autonomy", top_k=2)
+
+    for text in node_texts:
+        assert encoder.calls.get(text, 0) == 1
 
 
 def test_graph_hybrid_memory_and_verification(knowledge_graph: KnowledgeGraph) -> None:
