@@ -3,7 +3,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+
 from pathlib import Path
+
+import time
+
 from collections.abc import Iterable as IterableABC
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -34,7 +38,12 @@ from kolibri_x.runtime.journal import ActionJournal, JournalEntry
 from kolibri_x.runtime.metrics import SLOTracker
 from kolibri_x.runtime.self_learning import BackgroundSelfLearner
 from kolibri_x.runtime.workflow import ReminderEvent, ReminderRule, Workflow, WorkflowManager
-from kolibri_x.skills.store import SkillPolicyViolation, SkillStore
+from kolibri_x.skills.store import (
+    SkillPolicyViolation,
+    SkillQuota,
+    SkillQuotaExceeded,
+    SkillStore,
+)
 from kolibri_x.xai.reasoning import ReasoningLog
 
 
@@ -45,27 +54,106 @@ class SkillExecutionError(RuntimeError):
     """Raised when a sandboxed skill fails to produce a valid response."""
 
 
+@dataclass
+class _SkillUsage:
+    invocations: int = 0
+    cpu_ms: float = 0.0
+    wall_ms: float = 0.0
+    net_bytes: int = 0
+    fs_bytes: int = 0
+    fs_ops: int = 0
+
+
 class SkillSandbox:
     """Very small sandbox that hosts pure Python skill callables."""
 
     def __init__(self) -> None:
         self._executors: Dict[str, SkillExecutor] = {}
+        self._usage: Dict[str, _SkillUsage] = {}
+        self._quotas: Dict[str, SkillQuota] = {}
 
     def register(self, name: str, executor: SkillExecutor) -> None:
         self._executors[name] = executor
+        self._usage.setdefault(name, _SkillUsage())
 
-    def execute(self, name: str, payload: Mapping[str, object]) -> Mapping[str, object]:
+    def execute(
+        self,
+        name: str,
+        payload: Mapping[str, object],
+        *,
+        quota: Optional[SkillQuota] = None,
+    ) -> Mapping[str, object]:
         try:
             executor = self._executors[name]
         except KeyError as exc:  # pragma: no cover - defensive path
             raise KeyError(f"unknown skill executor: {name}") from exc
-        result = executor(payload)
+        usage = self._usage.setdefault(name, _SkillUsage())
+        if quota:
+            self._quotas[name] = quota
+            self._enforce_quota(name, usage, quota)
+        start_wall = time.perf_counter()
+        start_cpu = time.process_time()
+        result = None
+        try:
+            result = executor(payload)
+        finally:
+            elapsed_wall = (time.perf_counter() - start_wall) * 1000.0
+            elapsed_cpu = max((time.process_time() - start_cpu) * 1000.0, 0.0)
+            usage.invocations += 1
+            usage.wall_ms += elapsed_wall
+            usage.cpu_ms += elapsed_cpu
         if not isinstance(result, Mapping):
             raise SkillExecutionError(f"skill {name} returned non-mapping result: {type(result)!r}")
         return dict(result)
 
     def registered(self) -> Sequence[str]:
         return tuple(sorted(self._executors))
+
+    def record_io(
+        self,
+        name: str,
+        *,
+        net_bytes: int = 0,
+        fs_bytes: int = 0,
+        fs_ops: int = 0,
+    ) -> None:
+        usage = self._usage.setdefault(name, _SkillUsage())
+        if net_bytes:
+            usage.net_bytes += max(0, net_bytes)
+        if fs_bytes:
+            usage.fs_bytes += max(0, fs_bytes)
+        if fs_ops:
+            usage.fs_ops += max(0, fs_ops)
+        quota = self._quotas.get(name)
+        if quota:
+            self._enforce_quota(name, usage, quota)
+
+    def usage_snapshot(self, name: str) -> Mapping[str, float]:
+        usage = self._usage.get(name)
+        if not usage:
+            return {}
+        return {
+            "invocations": usage.invocations,
+            "cpu_ms": usage.cpu_ms,
+            "wall_ms": usage.wall_ms,
+            "net_bytes": usage.net_bytes,
+            "fs_bytes": usage.fs_bytes,
+            "fs_ops": usage.fs_ops,
+        }
+
+    def _enforce_quota(self, name: str, usage: _SkillUsage, quota: SkillQuota) -> None:
+        if quota.invocations is not None and usage.invocations >= quota.invocations:
+            raise SkillQuotaExceeded(name, "invocations", quota.invocations, usage.invocations)
+        if quota.cpu_ms is not None and usage.cpu_ms >= quota.cpu_ms:
+            raise SkillQuotaExceeded(name, "cpu_ms", quota.cpu_ms, int(usage.cpu_ms))
+        if quota.wall_ms is not None and usage.wall_ms >= quota.wall_ms:
+            raise SkillQuotaExceeded(name, "wall_ms", quota.wall_ms, int(usage.wall_ms))
+        if quota.net_bytes is not None and usage.net_bytes >= quota.net_bytes:
+            raise SkillQuotaExceeded(name, "net_bytes", quota.net_bytes, usage.net_bytes)
+        if quota.fs_bytes is not None and usage.fs_bytes >= quota.fs_bytes:
+            raise SkillQuotaExceeded(name, "fs_bytes", quota.fs_bytes, usage.fs_bytes)
+        if quota.fs_ops is not None and usage.fs_ops >= quota.fs_ops:
+            raise SkillQuotaExceeded(name, "fs_ops", quota.fs_ops, usage.fs_ops)
 
 
 @dataclass
@@ -654,13 +742,39 @@ class KolibriRuntime:
                 "step": step.description,
                 "modalities": list(modalities.keys()),
             }
+            quota = self.skill_store.quota(step.skill)
             with self.metrics.time_stage(f"skill::{step.skill}"):
-                result = self.sandbox.execute(step.skill, sandbox_payload)
+                result = self.sandbox.execute(step.skill, sandbox_payload, quota=quota)
             payload = {"status": "ok", "result": result}
             reasoning.add_step("skill", f"executed {step.skill}", [step.id], confidence=0.75)
             self.journal.append(
                 "skill_executed",
                 {"step_id": step.id, "skill": step.skill, "result_keys": sorted(result.keys())},
+            )
+        except SkillQuotaExceeded as exc:
+            payload = {
+                "status": "quota_blocked",
+                "reason": str(exc),
+                "resource": exc.resource,
+                "limit": exc.limit,
+                "used": exc.used,
+            }
+            reasoning.add_step(
+                "skill_quota",
+                f"{step.skill} quota exhausted ({exc.resource})",
+                [step.id],
+                confidence=0.2,
+            )
+            self.journal.append(
+                "skill_quota_blocked",
+                {
+                    "step_id": step.id,
+                    "skill": step.skill,
+                    "resource": exc.resource,
+                    "limit": exc.limit,
+                    "used": exc.used,
+                    "user_id": request.user_id,
+                },
             )
         except SkillPolicyViolation as exc:
             payload = {
