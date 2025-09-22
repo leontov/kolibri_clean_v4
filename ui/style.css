@@ -57,6 +57,7 @@ button:hover {
   transform: translateY(-1px);
 }
 
+
 .metric {
   margin-bottom: 0.4rem;
 }
@@ -72,6 +73,21 @@ button:hover {
 
 .chain-card,
 .chain-message {
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+  transform: none;
+}
+
+button:disabled:hover {
+  transform: none;
+}
+
+pre {
+  max-height: 320px;
+  overflow: auto;
+
   background: rgba(0, 0, 0, 0.35);
   border-radius: 10px;
   padding: 0.85rem;

@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timedelta, timezone
 import sys
 from pathlib import Path
-from typing import Mapping
+from typing import Dict, List, Mapping
 
 import pytest
 
@@ -207,6 +207,30 @@ def test_rag_pipeline_returns_supported_answer(knowledge_graph: KnowledgeGraph) 
     assert answer["verification"]["status"] in {"ok", "partial", "conflict"}
     assert "Answering" in answer["summary"]
     assert reasoning.steps(), "reasoning log should not be empty"
+
+
+def test_rag_pipeline_reuses_cached_embeddings(knowledge_graph: KnowledgeGraph) -> None:
+    class CountingEncoder(TextEncoder):
+        def __init__(self, dim: int = 16) -> None:
+            super().__init__(dim=dim)
+            self.calls: Dict[str, int] = {}
+
+        def encode(self, text: str) -> List[float]:
+            self.calls[text] = self.calls.get(text, 0) + 1
+            return super().encode(text)
+
+    encoder = CountingEncoder(dim=16)
+    pipeline = RAGPipeline(knowledge_graph, encoder=encoder)
+
+    node_texts = [node.text for node in knowledge_graph.nodes() if node.text]
+    for text in node_texts:
+        assert encoder.calls.get(text, 0) == 1
+
+    pipeline.retrieve("Explain autonomy", top_k=2)
+    pipeline.retrieve("Explain autonomy", top_k=2)
+
+    for text in node_texts:
+        assert encoder.calls.get(text, 0) == 1
 
 
 def test_graph_hybrid_memory_and_verification(knowledge_graph: KnowledgeGraph) -> None:
@@ -450,6 +474,36 @@ def test_background_self_learning_accumulates_updates() -> None:
     assert status["pending"]["writer"] == 0
     history = learner.history()
     assert history and history[-1]["updates"].get("writer")
+
+
+def test_background_self_learning_persistence(tmp_path: Path) -> None:
+    learner = BackgroundSelfLearner()
+    learner.enqueue(
+        "writer",
+        {"success": 1.0},
+        confidence=0.2,
+        metadata={"status": "ok"},
+        user_id="user-1",
+    )
+    initial_updates = learner.step()
+    assert "writer" in initial_updates
+    state_path = tmp_path / "self_learning.json"
+    learner.save(state_path)
+
+    restored = BackgroundSelfLearner()
+    restored.load(state_path)
+
+    assert restored.learner.snapshot() == learner.learner.snapshot()
+    assert restored.status()["pending"] == learner.status()["pending"]
+    assert restored.recent_samples() == learner.recent_samples()
+
+    restored.enqueue("writer", {"success": 1.0}, confidence=0.2, user_id="user-2")
+    continued = restored.step()
+    assert "writer" in continued
+    assert pytest.approx(continued["writer"]["success"], rel=1e-6) == pytest.approx(0.6, rel=1e-6)
+    samples = restored.recent_samples(limit=2)
+    assert len(samples) == 2
+    assert samples[-1].user_id == "user-2"
 
 
 def test_knowledge_graph_verification_and_compression() -> None:

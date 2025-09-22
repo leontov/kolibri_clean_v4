@@ -125,6 +125,7 @@ int kol_bootstrap(int steps, KolBootstrapReport *report) {
     if (!g_engine || steps <= 0) {
         return -1;
     }
+    engine_reset_dataset(g_engine);
     KolBootstrapReport local;
     memset(&local, 0, sizeof(local));
     local.start_step = g_engine->step;
