@@ -15,7 +15,9 @@ kolibri_native_demo: kolibri_native
 	./kolibri_native --ticks 3
 
 test_core: tests/test_core
+	rm -f kolibri_chain.jsonl
 	./tests/test_core
+	node tools/chain_verify.js
 
 tests/test_core: $(CORE_SOURCES) tests/test_core.c
 	$(CC) $(CFLAGS) tests/test_core.c $(CORE_SOURCES) -o $@ $(LDFLAGS)

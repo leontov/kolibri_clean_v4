@@ -1,6 +1,6 @@
 {
-  "steps": 30,
-  "depth_max": 2,
+  "steps": 32,
+  "depth_max": 3,
   "depth_decay": 0.7,
   "quorum": 0.6,
   "temperature": 0.15,
