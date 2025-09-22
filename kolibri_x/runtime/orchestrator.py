@@ -449,8 +449,10 @@ class KolibriRuntime:
         if skills:
             self.planner.register_skills(skills)
 
-        if self.iot_bridge and self.iot_bridge.journal is None:
-            self.iot_bridge.journal = self.journal
+        if self.iot_bridge:
+            if self.iot_bridge.journal is None:
+                self.iot_bridge.journal = self.journal
+            self.iot_bridge.attach_sensor_hub(self.sensor_hub)
 
     # ------------------------------------------------------------------
     # Session lifecycle

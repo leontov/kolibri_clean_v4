@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import time
 from datetime import datetime, timedelta, timezone
 import sys
 from pathlib import Path
@@ -281,6 +282,68 @@ def test_graph_hybrid_memory_and_verification(knowledge_graph: KnowledgeGraph) -
     assert any({"metric:latency", "metric:latency:duplicate"} == set(pair) for pair in duplicates)
     assert knowledge_graph.get_node("metric:latency") is not None
     assert knowledge_graph.get_node("metric:latency:duplicate") is None
+
+
+def test_iot_bridge_batch_and_sensor_sync() -> None:
+    policy = IoTPolicy(
+        allowlist={"lamp": ["on", "off"]},
+        max_actions_per_session=10,
+        max_batch_size=2,
+        max_deferred_actions=5,
+    )
+    journal = ActionJournal()
+    hub = SensorHub()
+    bridge = IoTBridge(policy, journal=journal, sensor_hub=hub, sensor_signal_prefix="edge")
+
+    commands = [
+        IoTCommand(device_id="lamp", action="on", parameters={"value": 1.0}),
+        IoTCommand(device_id="lamp", action="off", parameters={"value": 0.0}),
+    ]
+    acknowledgements = bridge.dispatch_batch("session-1", commands)
+    assert [ack["status"] for ack in acknowledgements] == ["executed", "executed"]
+
+    sequences = hub.to_sequences()
+    assert "edge::lamp::on" in sequences
+    assert "edge::lamp::off" in sequences
+
+    assert any(entry.event == "iot_sensor_sync" for entry in journal.entries())
+
+    with pytest.raises(RuntimeError):
+        bridge.dispatch_batch(
+            "session-2",
+            commands + [IoTCommand(device_id="lamp", action="on", parameters={"value": 0.5})],
+        )
+
+
+def test_iot_bridge_deferred_merge_and_release() -> None:
+    policy = IoTPolicy(
+        allowlist={"hub": ["sync", "ping"]},
+        max_actions_per_session=10,
+        max_batch_size=3,
+        max_deferred_actions=4,
+    )
+    journal = ActionJournal()
+    bridge = IoTBridge(policy, journal=journal, sensor_hub=SensorHub())
+
+    due = IoTCommand(device_id="hub", action="sync", parameters={"value": 0.1})
+    bridge.queue_delayed("edge-session", due, available_at=time.time() - 1)
+
+    released = bridge.release_delayed()
+    assert len(released) == 1
+
+    queued = IoTCommand(device_id="hub", action="sync", parameters={"value": 0.1})
+    bridge.queue_delayed("edge-session", queued, available_at=time.time() + 10)
+
+    offline_commands = [
+        IoTCommand(device_id="hub", action="sync", parameters={"value": 0.1}),
+        IoTCommand(device_id="hub", action="ping", parameters={"value": 1.0}),
+    ]
+    acknowledgements = bridge.merge_after_offline("edge-session", offline_commands)
+    assert len(acknowledgements) == 2
+    assert {ack["action"] for ack in acknowledgements} == {"sync", "ping"}
+
+    merge_events = [entry for entry in journal.entries() if entry.event == "iot_offline_merge"]
+    assert merge_events and merge_events[-1].payload["merged"] == 2
 
 
 def test_graph_lazy_updates_and_conflict_clarifications(knowledge_graph: KnowledgeGraph) -> None:
