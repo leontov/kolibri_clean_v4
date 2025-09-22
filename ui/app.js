@@ -39,6 +39,10 @@ async function boot() {
   const effEl = document.getElementById('eff');
   const complEl = document.getElementById('compl');
   const outEl = document.getElementById('out');
+  const memoryEl = document.getElementById('memory');
+
+  const LANGUAGE_PREFIX = 'Kolibri запомнил:';
+  const LANGUAGE_DEFAULT_MESSAGE = 'Колибри пока молчит...';
 
   document.getElementById('send').addEventListener('click', () => {
     const txt = msgEl.value.trim();
@@ -48,12 +52,15 @@ async function boot() {
     wasm.kol_free(ptr);
     msgEl.value = '';
     refreshHud();
+    refreshTail();
+    refreshLanguageSummary();
   });
 
   document.getElementById('tick').addEventListener('click', () => {
     wasm.kol_tick();
     refreshHud();
     refreshTail();
+    refreshLanguageSummary();
   });
 
   function refreshHud() {
@@ -177,8 +184,35 @@ async function boot() {
     outEl.innerHTML = markup;
   }
 
+  function refreshLanguageSummary() {
+    const cap = 512;
+    const ptr = wasm.kol_alloc(cap);
+    if (ptr === 0) {
+      memoryEl.textContent = LANGUAGE_DEFAULT_MESSAGE;
+      return;
+    }
+    const len = wasm.kol_language_generate(ptr, cap);
+    const text = len > 0 ? readString(instance, ptr, len) : '';
+    wasm.kol_free(ptr);
+
+    let display = text.trim();
+    if (len <= 0 || display.length === 0) {
+      memoryEl.textContent = LANGUAGE_DEFAULT_MESSAGE;
+      return;
+    }
+    if (display === LANGUAGE_DEFAULT_MESSAGE) {
+      memoryEl.textContent = LANGUAGE_DEFAULT_MESSAGE;
+      return;
+    }
+    if (display.startsWith(LANGUAGE_PREFIX)) {
+      display = display.slice(LANGUAGE_PREFIX.length).trim();
+    }
+    memoryEl.textContent = display.length > 0 ? display : LANGUAGE_DEFAULT_MESSAGE;
+  }
+
   refreshHud();
   refreshTail();
+  refreshLanguageSummary();
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./pwa/sw.js').catch(() => {});
