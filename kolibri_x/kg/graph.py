@@ -61,6 +61,7 @@ class KnowledgeGraph:
         self._critics: Dict[str, Callable[[Node], float]] = {}
         self._authorities: Dict[str, Callable[[Node], object]] = {}
         self._pending_updates: Dict[str, Dict[str, object]] = {}
+        self._listeners: Dict[str, List[Callable[[Mapping[str, object]], None]]] = {}
 
     # ------------------------------------------------------------------
     # Memory management
@@ -70,7 +71,9 @@ class KnowledgeGraph:
 
         tier = self._normalise_memory(memory or node.memory)
         stored = replace(node, memory=tier)
+        event = "node_updated" if self.get_node(stored.id) is not None else "node_added"
         self._node_store(tier)[stored.id] = stored
+        self._notify(event, {"node": stored})
 
     def promote_node(self, node_id: str) -> bool:
         """Move a node from operational memory into the long-term store."""
@@ -80,6 +83,7 @@ class KnowledgeGraph:
             return False
         promoted = replace(node, memory="long_term")
         self._long_term_nodes[node_id] = promoted
+        self._notify("node_updated", {"node": promoted})
         return True
 
     def add_edge(self, edge: Edge, *, memory: Optional[str] = None) -> None:
@@ -149,6 +153,7 @@ class KnowledgeGraph:
             updated = replace(node, metadata=metadata, **valid_change)
             self._node_store(updated.memory)[node_id] = updated
             self._backpropagate(node_id)
+            self._notify("node_updated", {"node": updated})
             processed.append(node_id)
         return tuple(processed)
 
@@ -331,6 +336,7 @@ class KnowledgeGraph:
             del self._operational_nodes[node_id]
         elif node_id in self._long_term_nodes:
             del self._long_term_nodes[node_id]
+        self._notify("node_removed", {"node_id": node_id})
 
     def _redirect_edges(self, old: str, new: str) -> None:
         for store in self._edge_iter():
@@ -463,6 +469,35 @@ class KnowledgeGraph:
             metadata["verification_sources"] = provenance[node_id]
             updated = replace(node, metadata=metadata)
             self._node_store(updated.memory)[node_id] = updated
+            self._notify("node_updated", {"node": updated})
+
+    # ------------------------------------------------------------------
+    # Event subscription helpers
+    # ------------------------------------------------------------------
+    def register_listener(
+        self, event: str, listener: Callable[[Mapping[str, object]], None]
+    ) -> None:
+        listeners = self._listeners.setdefault(event, [])
+        if listener not in listeners:
+            listeners.append(listener)
+
+    def unregister_listener(
+        self, event: str, listener: Callable[[Mapping[str, object]], None]
+    ) -> None:
+        listeners = self._listeners.get(event)
+        if not listeners:
+            return
+        if listener in listeners:
+            listeners.remove(listener)
+        if not listeners:
+            self._listeners.pop(event, None)
+
+    def _notify(self, event: str, payload: Mapping[str, object]) -> None:
+        for listener in self._listeners.get(event, []):
+            try:
+                listener(payload)
+            except Exception:
+                continue
 
     def _backpropagate(self, node_id: str) -> None:
         for store in self._edge_iter():
