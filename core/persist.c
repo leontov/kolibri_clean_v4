@@ -8,13 +8,20 @@
 #include <time.h>
 
 static const char *CHAIN_PATH = "kolibri_chain.jsonl";
+static const char *STATE_PATH = "kolibri_state.json";
 #if defined(__wasi__)
 static KolBlock wasm_blocks[512];
 static size_t   wasm_count = 0;
+static KolPersistState wasm_state;
+static int             wasm_state_valid = 0;
 #endif
 
 const char *persist_chain_path(void) {
     return CHAIN_PATH;
+}
+
+const char *persist_state_path(void) {
+    return STATE_PATH;
 }
 
 uint64_t persist_timestamp(void) {
@@ -182,6 +189,82 @@ int persist_load_blocks(KolBlock **blocks, size_t *count) {
         }
     }
     fclose(fp);
+    return 0;
+#endif
+}
+
+int persist_save_state(const KolPersistState *state) {
+    if (!state) {
+        return -1;
+    }
+#if defined(__wasi__)
+    wasm_state = *state;
+    wasm_state_valid = 1;
+    return 0;
+#else
+    FILE *fp = fopen(persist_state_path(), "wb");
+    if (!fp) {
+        return -1;
+    }
+    int wrote = fprintf(fp,
+                        "{\"step\":%u,\"eff\":%.17g,\"compl\":%.17g,\"stab\":%.17g,\"dataset_mean\":%.17g,\"dataset_min\":%.17g,\"dataset_max\":%.17g}\n",
+                        state->step,
+                        state->metrics.eff,
+                        state->metrics.compl,
+                        state->metrics.stab,
+                        state->dataset_mean,
+                        state->dataset_min,
+                        state->dataset_max);
+    fclose(fp);
+    return wrote > 0 ? 0 : -1;
+#endif
+}
+
+int persist_load_state(KolPersistState *state) {
+    if (!state) {
+        return -1;
+    }
+#if defined(__wasi__)
+    if (!wasm_state_valid) {
+        memset(state, 0, sizeof(*state));
+        return -1;
+    }
+    *state = wasm_state;
+    return 0;
+#else
+    FILE *fp = fopen(persist_state_path(), "rb");
+    if (!fp) {
+        memset(state, 0, sizeof(*state));
+        return -1;
+    }
+    char line[512];
+    if (!fgets(line, sizeof(line), fp)) {
+        fclose(fp);
+        memset(state, 0, sizeof(*state));
+        return -1;
+    }
+    fclose(fp);
+    unsigned int step = 0;
+    double eff = 0.0;
+    double compl = 0.0;
+    double stab = 0.0;
+    double mean = 0.0;
+    double minv = 0.0;
+    double maxv = 0.0;
+    if (sscanf(line,
+               "{\"step\":%u,\"eff\":%lf,\"compl\":%lf,\"stab\":%lf,\"dataset_mean\":%lf,\"dataset_min\":%lf,\"dataset_max\":%lf}",
+               &step, &eff, &compl, &stab, &mean, &minv, &maxv) != 7) {
+        memset(state, 0, sizeof(*state));
+        return -1;
+    }
+    memset(state, 0, sizeof(*state));
+    state->step = step;
+    state->metrics.eff = eff;
+    state->metrics.compl = compl;
+    state->metrics.stab = stab;
+    state->dataset_mean = mean;
+    state->dataset_min = minv;
+    state->dataset_max = maxv;
     return 0;
 #endif
 }
