@@ -39,10 +39,15 @@ async function boot() {
   const effEl = document.getElementById('eff');
   const complEl = document.getElementById('compl');
   const outEl = document.getElementById('out');
+
+  const storyEl = document.getElementById('story');
+  const memoryEl = document.getElementById('memory');
+
   const memoryEl = document.getElementById('memory');
 
   const LANGUAGE_PREFIX = 'Kolibri запомнил:';
   const LANGUAGE_DEFAULT_MESSAGE = 'Колибри пока молчит...';
+
 
   const sendBtn = document.getElementById('send');
   let isSending = false;
@@ -88,7 +93,11 @@ async function boot() {
     msgEl.value = '';
     refreshHud();
     refreshTail();
+
+    refreshInsights();
+
     refreshLanguageSummary();
+
 
   });
 
@@ -96,7 +105,11 @@ async function boot() {
     wasm.kol_tick();
     refreshHud();
     refreshTail();
+
+    refreshInsights();
+
     refreshLanguageSummary();
+
   });
 
   function refreshHud() {
@@ -246,9 +259,41 @@ async function boot() {
     memoryEl.textContent = display.length > 0 ? display : LANGUAGE_DEFAULT_MESSAGE;
   }
 
+  function readWasmText(invoker) {
+    const cap = 2048;
+    const ptr = wasm.kol_alloc(cap);
+    try {
+      const len = invoker(ptr, cap);
+      const usable = len > 0 ? len : 0;
+      const raw = readString(instance, ptr, usable);
+      return raw.trim();
+    } finally {
+      wasm.kol_free(ptr);
+    }
+  }
+
+  function refreshNarrative() {
+    const text = readWasmText((ptr, cap) => wasm.kol_emit_text(ptr, cap));
+    storyEl.textContent = text || '—';
+  }
+
+  function refreshMemory() {
+    const text = readWasmText((ptr, cap) => wasm.kol_language_generate(ptr, cap));
+    memoryEl.textContent = text || '—';
+  }
+
+  function refreshInsights() {
+    refreshNarrative();
+    refreshMemory();
+  }
+
   refreshHud();
   refreshTail();
+
+  refreshInsights();
+
   refreshLanguageSummary();
+
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./pwa/sw.js').catch(() => {});

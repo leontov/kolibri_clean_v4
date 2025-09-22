@@ -47,6 +47,8 @@ int main(void) {
     int  text_len = kol_emit_text(text_buf, sizeof(text_buf));
     assert(text_len >= 0);
     assert((size_t)text_len < sizeof(text_buf));
+    assert(strstr(text_buf, "Узор:") != NULL);
+    assert(strstr(text_buf, "Память:") != NULL);
     double eff = kol_eff();
     double compl = kol_compl();
     assert(eff >= 0.0 && eff <= 1.0);
@@ -55,6 +57,8 @@ int main(void) {
     int response_len = kol_language_generate(response, sizeof(response));
     assert(response_len > 0);
     assert(strcmp(response, "Колибри пока молчит...") != 0);
+    assert(strstr(response, "Колибри выделяет темы") != NULL);
+    assert(strstr(response, "•") != NULL);
     assert(strstr(response, "привет") != NULL || strstr(response, "Привет") != NULL);
     char buf[2048];
     int  len = kol_tail_json(buf, (int)sizeof(buf), 3);
