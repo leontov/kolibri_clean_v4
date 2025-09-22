@@ -69,3 +69,48 @@ pre {
 .metric {
   margin-bottom: 0.4rem;
 }
+
+.digits-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(48px, 1fr));
+  gap: 0.4rem;
+  margin: 0.6rem 0 1rem;
+}
+
+.digit-cell {
+  position: relative;
+  padding: 0.5rem 0.25rem 0.75rem;
+  border-radius: 8px;
+  text-align: center;
+  font-weight: 600;
+  color: #e6edf3;
+  background: rgba(255, 255, 255, 0.04);
+  overflow: hidden;
+}
+
+.digit-cell::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: calc((var(--digit, 0) / 9) * 100%);
+  background: linear-gradient(180deg, rgba(34, 211, 238, 0.35), rgba(59, 130, 246, 0.65));
+  transition: height 0.3s ease;
+}
+
+.digit-value,
+.digit-index {
+  position: relative;
+  z-index: 1;
+  display: block;
+}
+
+.digit-value {
+  font-size: 1.1rem;
+}
+
+.digit-index {
+  font-size: 0.65rem;
+  opacity: 0.7;
+}
