@@ -388,6 +388,30 @@ class KolibriRuntime:
         """Adds a document to the knowledge graph via the ingestor."""
 
         report = self.ingestor.ingest(document, self.graph)
+        verification = self.graph.verify_with_critics()
+        conflict_pairs = {
+            tuple(sorted(pair)) for pair in report.conflicts
+        } | {tuple(sorted(pair)) for pair in self.graph.detect_conflicts()}
+        proofs = [
+            {
+                "node_id": result.node_id,
+                "source": result.critic,
+                "score": round(result.score, 3),
+                "provenance": result.provenance,
+            }
+            for result in verification
+            if result.score >= 0.75
+        ]
+        disputed = [
+            {
+                "node_id": result.node_id,
+                "source": result.critic,
+                "score": round(result.score, 3),
+                "provenance": result.provenance,
+            }
+            for result in verification
+            if result.score < 0.4
+        ]
         self.journal.append(
             "knowledge_ingest",
             {
@@ -398,6 +422,16 @@ class KolibriRuntime:
                 "warnings": list(report.warnings),
             },
         )
+        if conflict_pairs or proofs or disputed:
+            self.journal.append(
+                "knowledge_verification",
+                {
+                    "document_id": document.doc_id,
+                    "conflicts": sorted(conflict_pairs),
+                    "proofs": proofs,
+                    "disputed": disputed,
+                },
+            )
         return report
 
     def schedule_workflow(
