@@ -4,9 +4,15 @@ from __future__ import annotations
 import hashlib
 import json
 
+import multiprocessing
+from multiprocessing.connection import Connection
+import traceback
+
+
 from pathlib import Path
 
 import time
+
 
 from collections.abc import Iterable as IterableABC
 from dataclasses import dataclass, field
@@ -54,6 +60,54 @@ class SkillExecutionError(RuntimeError):
     """Raised when a sandboxed skill fails to produce a valid response."""
 
 
+
+def _invoke_skill(
+    result_conn: Connection,
+    executor: SkillExecutor,
+    payload: Mapping[str, object],
+    memory_limit_bytes: Optional[int],
+) -> None:
+    """Worker entry point executed inside a separate process."""
+
+    if memory_limit_bytes is not None:
+        try:  # pragma: no cover - platform specific guard
+            import resource
+
+            soft, hard = resource.getrlimit(resource.RLIMIT_AS)
+            new_soft = memory_limit_bytes
+            new_hard = hard
+            if hard == resource.RLIM_INFINITY or hard > memory_limit_bytes:
+                new_hard = memory_limit_bytes
+            elif hard < memory_limit_bytes:
+                new_soft = hard
+                new_hard = hard
+            resource.setrlimit(resource.RLIMIT_AS, (new_soft, new_hard))
+        except ValueError:  # pragma: no cover - fallback attempt
+            try:
+                resource.setrlimit(resource.RLIMIT_AS, (memory_limit_bytes, resource.RLIM_INFINITY))
+            except (ValueError, OSError):
+                pass
+        except (ImportError, AttributeError):  # pragma: no cover - best effort guard
+            pass
+
+    try:
+        result = executor(payload)
+    except BaseException as exc:  # pragma: no cover - protective path
+        result_conn.send(
+            (
+                "error",
+                {
+                    "exc_type": type(exc).__name__,
+                    "message": str(exc),
+                    "traceback": traceback.format_exc(),
+                },
+            )
+        )
+    else:
+        result_conn.send(("ok", result))
+    finally:
+        result_conn.close()
+
 @dataclass
 class _SkillUsage:
     invocations: int = 0
@@ -64,13 +118,32 @@ class _SkillUsage:
     fs_ops: int = 0
 
 
+
 class SkillSandbox:
     """Very small sandbox that hosts pure Python skill callables."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        *,
+        time_limit: float = 1.0,
+        memory_limit_mb: Optional[int] = 128,
+        journal: Optional[ActionJournal] = None,
+    ) -> None:
         self._executors: Dict[str, SkillExecutor] = {}
+
+        self._time_limit = max(float(time_limit), 0.0)
+        self._memory_limit_bytes = (
+            int(memory_limit_mb) * 1024 * 1024 if memory_limit_mb is not None else None
+        )
+        self._journal = journal
+        try:
+            self._ctx = multiprocessing.get_context("fork")
+        except ValueError:  # pragma: no cover - fallback for platforms without fork
+            self._ctx = multiprocessing.get_context()
+
         self._usage: Dict[str, _SkillUsage] = {}
         self._quotas: Dict[str, SkillQuota] = {}
+
 
     def register(self, name: str, executor: SkillExecutor) -> None:
         self._executors[name] = executor
@@ -87,6 +160,83 @@ class SkillSandbox:
             executor = self._executors[name]
         except KeyError as exc:  # pragma: no cover - defensive path
             raise KeyError(f"unknown skill executor: {name}") from exc
+
+        parent_conn, child_conn = self._ctx.Pipe(duplex=False)
+        process = self._ctx.Process(
+            target=_invoke_skill,
+            args=(child_conn, executor, payload, self._memory_limit_bytes),
+        )
+        process.start()
+        child_conn.close()
+        process.join(self._time_limit if self._time_limit > 0 else None)
+        if process.is_alive():
+            process.terminate()
+            process.join()
+            self._log_event(
+                "skill_timeout",
+                {
+                    "skill": name,
+                    "time_limit": self._time_limit,
+                    "payload_keys": sorted(map(str, payload.keys())),
+                },
+            )
+            parent_conn.close()
+            raise SkillExecutionError(f"skill {name} exceeded time limit of {self._time_limit} seconds")
+
+        status: Optional[str]
+        data: Mapping[str, object]
+        try:
+            if parent_conn.poll():
+                status, data = parent_conn.recv()
+            else:
+                status = None
+                data = {}
+        except EOFError:
+            status = None
+            data = {}
+        finally:
+            parent_conn.close()
+
+        if status == "ok":
+            result = data
+            if not isinstance(result, Mapping):
+                self._log_event(
+                    "skill_execution_error",
+                    {
+                        "skill": name,
+                        "error_type": "TypeError",
+                        "message": f"non-mapping result: {type(result)!r}",
+                    },
+                )
+                raise SkillExecutionError(
+                    f"skill {name} returned non-mapping result: {type(result)!r}"
+                )
+            return dict(result)
+
+        if status == "error":
+            error_type = str(data.get("exc_type"))
+            event = "skill_memory_limit_exceeded" if error_type == "MemoryError" else "skill_execution_error"
+            self._log_event(
+                event,
+                {
+                    "skill": name,
+                    "error_type": error_type,
+                    "message": data.get("message", ""),
+                },
+            )
+            raise SkillExecutionError(f"skill {name} failed: {data.get('message', 'unknown error')}")
+
+        exitcode = process.exitcode
+        self._log_event(
+            "skill_process_terminated",
+            {
+                "skill": name,
+                "exit_code": exitcode,
+                "payload_keys": sorted(map(str, payload.keys())),
+            },
+        )
+        raise SkillExecutionError(f"skill {name} terminated unexpectedly (exit code={exitcode})")
+
         usage = self._usage.setdefault(name, _SkillUsage())
         if quota:
             self._quotas[name] = quota
@@ -106,8 +256,17 @@ class SkillSandbox:
             raise SkillExecutionError(f"skill {name} returned non-mapping result: {type(result)!r}")
         return dict(result)
 
+
     def registered(self) -> Sequence[str]:
         return tuple(sorted(self._executors))
+
+
+    def bind_journal(self, journal: ActionJournal) -> None:
+        self._journal = journal
+
+    def _log_event(self, event: str, payload: Mapping[str, object]) -> None:
+        if self._journal is not None:
+            self._journal.append(event, payload)
 
     def record_io(
         self,
@@ -154,6 +313,7 @@ class SkillSandbox:
             raise SkillQuotaExceeded(name, "fs_bytes", quota.fs_bytes, usage.fs_bytes)
         if quota.fs_ops is not None and usage.fs_ops >= quota.fs_ops:
             raise SkillQuotaExceeded(name, "fs_ops", quota.fs_ops, usage.fs_ops)
+
 
 
 @dataclass
@@ -243,12 +403,16 @@ class KolibriRuntime:
         self.fusion_budget = fusion_budget
         self.planner = planner or NeuroSemanticPlanner()
         self.skill_store = skill_store or SkillStore()
-        self.sandbox = sandbox or SkillSandbox()
+        self.journal = journal or ActionJournal()
+        if sandbox is None:
+            self.sandbox = SkillSandbox(journal=self.journal)
+        else:
+            self.sandbox = sandbox
+            self.sandbox.bind_journal(self.journal)
         self.privacy = privacy or PrivacyOperator()
         self.profiler = profiler or OnDeviceProfiler()
         self.empathy = empathy or EmpathyModulator()
         self.cache = cache
-        self.journal = journal or ActionJournal()
         self.metrics = metrics or SLOTracker()
         self.iot_bridge = iot_bridge
         self.workflow_manager = workflow_manager or WorkflowManager()
