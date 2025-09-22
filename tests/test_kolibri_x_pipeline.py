@@ -65,7 +65,15 @@ from kolibri_x.xai.reasoning import ReasoningLog  # noqa: E402
 
 @pytest.fixture()
 def knowledge_graph() -> KnowledgeGraph:
-    graph = KnowledgeGraph()
+    config: Mapping[str, object] = {
+        "knowledge_graph": {
+            "critics": {
+                "confidence_gate": {"type": "confidence_threshold", "threshold": 0.6},
+                "keyword_focus": {"type": "keyword_presence", "keywords": ["kolibri"]},
+            }
+        }
+    }
+    graph = KnowledgeGraph(config=config)
     graph.add_node(
         Node(
             id="claim:collaboration",
@@ -235,7 +243,13 @@ def test_rag_pipeline_reuses_cached_embeddings(knowledge_graph: KnowledgeGraph) 
 
 
 def test_graph_hybrid_memory_and_verification(knowledge_graph: KnowledgeGraph) -> None:
-    knowledge_graph.register_critic("length", lambda node: min(1.0, len(node.text.split()) / 12))
+    counter = {"calls": 0}
+
+    def counting_critic(node: Node) -> float:
+        counter["calls"] += 1
+        return min(1.0, len(node.text.split()) / 12)
+
+    knowledge_graph.register_critic("length", counting_critic)
     knowledge_graph.register_authority(
         "sources",
         lambda node: {"score": 1.0 if node.sources else 0.3, "source_count": len(node.sources)},
@@ -273,10 +287,27 @@ def test_graph_hybrid_memory_and_verification(knowledge_graph: KnowledgeGraph) -
     )
     knowledge_graph.promote_node("metric:latency")
 
-    results = knowledge_graph.verify_with_critics({})
+    results = knowledge_graph.verify_with_critics()
     assert any(result.provenance == "authority" for result in results)
     node = knowledge_graph.get_node("metric:latency")
     assert node is not None and node.metadata.get("verification_score", 0.0) > 0
+
+    initial_calls = counter["calls"]
+    assert initial_calls >= len(knowledge_graph.nodes())
+    _ = knowledge_graph.verify_with_critics()
+    assert counter["calls"] == initial_calls, "cached verification should skip critic execution"
+
+    knowledge_graph.add_node(
+        Node(
+            id="metric:latency:extra",
+            type="Metric",
+            text="Kolibri latency improves further",
+            sources=["https://kolibri.example/perf"],
+            confidence=0.8,
+        )
+    )
+    _ = knowledge_graph.verify_with_critics()
+    assert counter["calls"] > initial_calls, "adding nodes should invalidate cache"
 
     duplicates = knowledge_graph.deduplicate_embeddings()
     assert any({"metric:latency", "metric:latency:duplicate"} == set(pair) for pair in duplicates)
@@ -455,6 +486,28 @@ def test_planner_aligns_steps_with_skills(skill_store: SkillStore) -> None:
     hierarchical = planner.hierarchical_plan("Draft and refine the product pitch deck.")
     assert isinstance(hierarchical, HierarchicalPlan)
     assert hierarchical.assignments
+
+
+def test_planner_respects_hint_sequences() -> None:
+    manifests = [
+        SkillManifest.from_dict(
+            {
+                "name": name,
+                "version": "0.1.0",
+                "inputs": ["text"],
+                "permissions": ["net.read:whitelist"],
+                "billing": "per_call",
+                "policy": {},
+                "entry": f"{name}.py",
+            }
+        )
+        for name in ("researcher", "writer", "reviewer")
+    ]
+    planner = NeuroSemanticPlanner({manifest.name: manifest for manifest in manifests})
+    plan = planner.plan("Prepare investor update", hints=["researcher -> writer -> reviewer"])
+    assert [step.skill for step in plan.steps] == ["researcher", "writer", "reviewer"]
+    assert plan.steps[1].dependencies == ("step-1",)
+    assert plan.steps[2].dependencies == ("step-2",)
 
 
 def test_offline_cache_eviction() -> None:
@@ -726,6 +779,30 @@ def test_runtime_orchestrator_end_to_end(
     assert "self_learning" in all_events
 
 
+def test_runtime_plan_reuse_and_replay(
+    knowledge_graph: KnowledgeGraph, skill_store: SkillStore
+) -> None:
+    runtime = _bootstrap_runtime(knowledge_graph, skill_store)
+    request = RuntimeRequest(
+        user_id="user-1",
+        goal="Draft an investor pitch deck",
+        modalities={"text": "Need a compelling narrative for Kolibri-x."},
+        hints=["writer"],
+        skill_scopes=["net.read:whitelist"],
+    )
+    runtime.process(request)
+    history = runtime.plan_journal()
+    assert history and history[0].goal == request.goal
+    assert history[0].usage_count == 1
+    replay_payload = runtime.replay_plan(request.goal, request.hints)
+    assert replay_payload is not None
+    assert replay_payload["plan"]["goal"] == request.goal
+    runtime.cache = None
+    runtime.process(request)
+    updated_history = runtime.plan_journal()
+    assert updated_history[0].usage_count >= 2
+
+
 def test_skill_policy_violation_blocks_execution(
     knowledge_graph: KnowledgeGraph, skill_store: SkillStore
 ) -> None:
@@ -789,6 +866,13 @@ def test_runtime_ingestion_and_workflow_management(
     assert report.nodes_added >= 3
     assert report.conflicts, "conflicting claims should be linked"
     assert knowledge_graph.detect_conflicts()
+    verification_entries = [
+        entry for entry in runtime.journal.entries() if entry.event == "knowledge_verification"
+    ]
+    assert verification_entries, "verification results should be journaled"
+    verification_payload = verification_entries[-1].payload
+    assert verification_payload["conflicts"], "conflict pairs must be logged"
+    assert "proofs" in verification_payload and "disputed" in verification_payload
     deadline = datetime(2025, 1, 5, tzinfo=timezone.utc)
     workflow = runtime.schedule_workflow(
         goal="Close security review",

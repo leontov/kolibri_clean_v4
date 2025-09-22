@@ -2,13 +2,22 @@
 from __future__ import annotations
 
 import json
+
+import logging
+
 import re
+
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, List, Mapping, Optional, Sequence, Set
 
+
+
+LOGGER = logging.getLogger(__name__)
+
 from kolibri_x.runtime.journal import ActionJournal
+
 
 MANDATORY_FIELDS = {"name", "version", "inputs", "permissions", "billing", "policy", "entry"}
 
@@ -409,6 +418,35 @@ class SkillStore:
     def load_from_file(path: str | Path) -> SkillManifest:
         with open(path, "r", encoding="utf-8") as handle:
             return SkillManifest.from_dict(json.load(handle))
+
+    def load_directory(self, path: str | Path) -> None:
+        directory = Path(path)
+        if not directory.exists():
+            LOGGER.debug("skill manifest directory does not exist: %s", directory)
+            return
+        if not directory.is_dir():
+            LOGGER.error("skill manifest path is not a directory: %s", directory)
+            return
+
+        for candidate in sorted(directory.glob("*.json")):
+            try:
+                with candidate.open("r", encoding="utf-8") as handle:
+                    data = json.load(handle)
+            except (OSError, json.JSONDecodeError) as exc:
+                LOGGER.error("failed to load skill manifest %s: %s", candidate, exc)
+                continue
+
+            if not isinstance(data, dict):
+                LOGGER.error("skill manifest %s must be a JSON object", candidate)
+                continue
+
+            try:
+                manifest = SkillManifest.from_dict(data)
+            except Exception as exc:
+                LOGGER.error("invalid skill manifest %s: %s", candidate, exc)
+                continue
+
+            self.register(manifest)
 
 
 __all__ = ["SkillManifest", "SkillManifestValidationError", "SkillPolicyViolation", "SkillStore"]

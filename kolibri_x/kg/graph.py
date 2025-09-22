@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 from dataclasses import dataclass, field, replace
 from typing import (
+    Any,
     Callable,
     Dict,
     Iterable,
@@ -56,7 +57,7 @@ class VerificationResult:
 class KnowledgeGraph:
     """Stores nodes, edges, and reasoning facilities for Kolibri-x."""
 
-    def __init__(self) -> None:
+    def __init__(self, config: Optional[Mapping[str, object] | str | Path] = None) -> None:
         self._operational_nodes: MutableMapping[str, Node] = {}
         self._long_term_nodes: MutableMapping[str, Node] = {}
         self._operational_edges: List[Edge] = []
@@ -64,6 +65,18 @@ class KnowledgeGraph:
         self._critics: Dict[str, Callable[[Node], float]] = {}
         self._authorities: Dict[str, Callable[[Node], object]] = {}
         self._pending_updates: Dict[str, Dict[str, object]] = {}
+
+        self._revision: int = 0
+        self._verification_cache: Dict[str, Tuple[int, Tuple[VerificationResult, ...]]] = {}
+
+        config_source = config
+        if config_source is None:
+            default_path = Path("configs/kolibri.json")
+            if default_path.exists():
+                config_source = default_path
+        if config_source is not None:
+            self.load_critics_from_config(config_source)
+
         self._listeners: Dict[str, List[Callable[[Mapping[str, object]], None]]] = {}
 
     # ------------------------------------------------------------------
@@ -131,6 +144,7 @@ class KnowledgeGraph:
                     self._pending_updates.update(pending)
         return True
 
+
     # ------------------------------------------------------------------
     # Memory management
     # ------------------------------------------------------------------
@@ -141,7 +155,11 @@ class KnowledgeGraph:
         stored = replace(node, memory=tier)
         event = "node_updated" if self.get_node(stored.id) is not None else "node_added"
         self._node_store(tier)[stored.id] = stored
+
+        self._bump_revision()
+
         self._notify(event, {"node": stored})
+
 
     def promote_node(self, node_id: str) -> bool:
         """Move a node from operational memory into the long-term store."""
@@ -151,13 +169,18 @@ class KnowledgeGraph:
             return False
         promoted = replace(node, memory="long_term")
         self._long_term_nodes[node_id] = promoted
+
+        self._bump_revision()
+
         self._notify("node_updated", {"node": promoted})
+
         return True
 
     def add_edge(self, edge: Edge, *, memory: Optional[str] = None) -> None:
         tier = self._normalise_memory(memory or edge.memory)
         stored = replace(edge, memory=tier)
         self._edge_store(tier).append(stored)
+        self._bump_revision()
 
     def nodes(self, level: Optional[str] = None) -> Sequence[Node]:
         tier = self._normalise_memory(level) if level else None
@@ -223,6 +246,8 @@ class KnowledgeGraph:
             self._backpropagate(node_id)
             self._notify("node_updated", {"node": updated})
             processed.append(node_id)
+        if processed:
+            self._bump_revision()
         return tuple(processed)
 
     # ------------------------------------------------------------------
@@ -230,9 +255,11 @@ class KnowledgeGraph:
     # ------------------------------------------------------------------
     def register_critic(self, name: str, critic: Callable[[Node], float]) -> None:
         self._critics[name] = critic
+        self._invalidate_verification_cache()
 
     def register_authority(self, name: str, authority: Callable[[Node], object]) -> None:
         self._authorities[name] = authority
+        self._invalidate_verification_cache()
 
     def verify_with_critics(
         self,
@@ -242,7 +269,6 @@ class KnowledgeGraph:
     ) -> List[VerificationResult]:
         """Run automated verification via critics and external authorities."""
 
-        results: List[VerificationResult] = []
         critic_pool: Dict[str, Callable[[Node], float]] = {}
         critic_pool.update(self._critics)
         if critics:
@@ -253,7 +279,64 @@ class KnowledgeGraph:
         if authorities:
             authority_pool.update(dict(authorities))
 
-        for name, critic in critic_pool.items():
+        use_cache = not critics and not authorities
+        cache_key = "default"
+        if use_cache:
+            cached = self._verification_cache.get(cache_key)
+            if cached and cached[0] == self._revision:
+                return [result for result in cached[1]]
+
+        results = self._execute_verification(critic_pool, authority_pool)
+
+        if use_cache:
+            self._verification_cache[cache_key] = (self._revision, tuple(results))
+
+        self._record_verification(results)
+        return list(results)
+
+    def load_critics_from_config(self, config: Mapping[str, object] | str | Path) -> None:
+        """Initialise critic registry using structured configuration."""
+
+        data: Mapping[str, Any]
+        if isinstance(config, (str, Path)):
+            path = Path(config)
+            try:
+                text = path.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise RuntimeError(f"failed to read critic config: {path}") from exc
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError as exc:  # pragma: no cover - defensive
+                raise ValueError(f"invalid critic configuration JSON: {path}") from exc
+            data = parsed
+        else:
+            data = config
+
+        kg_config = data.get("knowledge_graph") if isinstance(data, Mapping) else None
+        critic_specs: Mapping[str, Any]
+        if isinstance(kg_config, Mapping) and isinstance(kg_config.get("critics"), Mapping):
+            critic_specs = kg_config["critics"]  # type: ignore[assignment]
+        elif isinstance(data.get("critics"), Mapping):
+            critic_specs = data["critics"]  # type: ignore[assignment]
+        else:
+            critic_specs = {}
+
+        for name, spec in critic_specs.items():
+            critic = self._build_configured_critic(name, spec)
+            if critic is not None:
+                self.register_critic(name, critic)
+
+    # ------------------------------------------------------------------
+    # Internal verification helpers
+    # ------------------------------------------------------------------
+    def _execute_verification(
+        self,
+        critics: Mapping[str, Callable[[Node], float]],
+        authorities: Mapping[str, Callable[[Node], object]],
+    ) -> List[VerificationResult]:
+        results: List[VerificationResult] = []
+
+        for name, critic in critics.items():
             for node in self.nodes():
                 results.append(
                     VerificationResult(
@@ -264,7 +347,7 @@ class KnowledgeGraph:
                     )
                 )
 
-        for name, authority in authority_pool.items():
+        for name, authority in authorities.items():
             for node in self.nodes():
                 payload = authority(node)
                 score, details = self._normalise_authority_payload(payload)
@@ -278,8 +361,76 @@ class KnowledgeGraph:
                     )
                 )
 
-        self._record_verification(results)
         return results
+
+    def _build_configured_critic(self, name: str, spec: object) -> Optional[Callable[[Node], float]]:
+        if callable(spec):
+            return spec  # pragma: no cover - direct function injection
+
+        if isinstance(spec, (int, float)):
+            return self._confidence_threshold_critic(float(spec))
+
+        if isinstance(spec, str):
+            return self._keyword_presence_critic([spec])
+
+        if isinstance(spec, Sequence) and not isinstance(spec, (bytes, bytearray, str)):
+            return self._keyword_presence_critic([str(item) for item in spec])
+
+        if isinstance(spec, Mapping):
+            critic_type = str(spec.get("type", "confidence_threshold")).lower()
+            if critic_type == "confidence_threshold":
+                threshold = float(spec.get("threshold", 0.6))
+                window = float(spec.get("window", 0.15))
+                return self._confidence_threshold_critic(threshold, window=window)
+            if critic_type == "keyword_presence":
+                keywords = spec.get("keywords")
+                if isinstance(keywords, Mapping):
+                    keywords = keywords.values()
+                if isinstance(keywords, Sequence) and not isinstance(keywords, (bytes, bytearray, str)):
+                    return self._keyword_presence_critic([str(item) for item in keywords])
+                if isinstance(spec.get("pattern"), str):
+                    return self._keyword_presence_critic([str(spec["pattern"])])
+            if critic_type == "regex":
+                pattern = str(spec.get("pattern", name))
+                return self._regex_critic(pattern)
+
+        return None
+
+    def _confidence_threshold_critic(self, threshold: float, *, window: float = 0.15) -> Callable[[Node], float]:
+        upper = max(0.0, min(1.0, threshold))
+        ramp = max(1e-6, float(window))
+
+        def critic(node: Node) -> float:
+            confidence = float(node.confidence)
+            if confidence >= upper:
+                return 1.0
+            lower = max(0.0, upper - ramp)
+            if confidence <= lower:
+                return max(0.0, confidence / max(upper, 1e-6))
+            span = max(upper - lower, 1e-6)
+            return max(0.0, min(1.0, (confidence - lower) / span))
+
+        return critic
+
+    def _keyword_presence_critic(self, keywords: Sequence[str]) -> Callable[[Node], float]:
+        terms = [keyword.lower() for keyword in keywords if keyword]
+        if not terms:
+            return lambda node: 1.0
+
+        def critic(node: Node) -> float:
+            text = node.text.lower()
+            matches = sum(1 for term in terms if term in text)
+            return matches / len(terms)
+
+        return critic
+
+    def _regex_critic(self, pattern: str) -> Callable[[Node], float]:
+        compiled = re.compile(pattern, flags=re.IGNORECASE)
+
+        def critic(node: Node) -> float:
+            return 1.0 if compiled.search(node.text) else 0.0
+
+        return critic
 
     # ------------------------------------------------------------------
     # Graph maintenance helpers
@@ -484,13 +635,22 @@ class KnowledgeGraph:
         yield self._long_term_edges
 
     def _remove_node(self, node_id: str) -> None:
+        removed = False
         if node_id in self._operational_nodes:
             del self._operational_nodes[node_id]
+            removed = True
         elif node_id in self._long_term_nodes:
             del self._long_term_nodes[node_id]
+
+            removed = True
+        if removed:
+            self._bump_revision()
+
         self._notify("node_removed", {"node_id": node_id})
 
+
     def _redirect_edges(self, old: str, new: str) -> None:
+        changed = False
         for store in self._edge_iter():
             for index, edge in enumerate(list(store)):
                 if edge.source == old or edge.target == old:
@@ -503,6 +663,9 @@ class KnowledgeGraph:
                         updated = replace(updated, target=new)
                     updated = replace(updated, metadata=metadata)
                     store[index] = updated
+                    changed = True
+        if changed:
+            self._bump_revision()
 
     def _find_matching_node(
         self, candidates: Sequence[Node], vector: Sequence[float], threshold: float
@@ -652,6 +815,7 @@ class KnowledgeGraph:
                 continue
 
     def _backpropagate(self, node_id: str) -> None:
+        changed = False
         for store in self._edge_iter():
             for index, edge in enumerate(list(store)):
                 if edge.source != node_id and edge.target != node_id:
@@ -670,6 +834,16 @@ class KnowledgeGraph:
                 metadata_n["pending_backprop"] = sorted(pending)
                 updated = replace(neighbour, metadata=metadata_n)
                 self._node_store(updated.memory)[neighbour_id] = updated
+                changed = True
+        if changed:
+            self._bump_revision()
+
+    def _bump_revision(self) -> None:
+        self._revision += 1
+        self._invalidate_verification_cache()
+
+    def _invalidate_verification_cache(self) -> None:
+        self._verification_cache.clear()
 
     def _normalise_text(self, text: str, *, drop_negation: bool = False) -> str:
         tokens = [token.lower() for token in re.findall(r"[\w']+", text)]
