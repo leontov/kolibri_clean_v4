@@ -17,12 +17,29 @@
           <button id="tick">Tick</button>
         </div>
       </section>
-      <section class="panel status">
-        <h2>Метрики</h2>
-        <div class="metric">eff: <span id="eff">0.0000</span></div>
-        <div class="metric">compl: <span id="compl">0.00</span></div>
-        <h2>Цепочка</h2>
-        <pre id="out"></pre>
+      <section class="panel status" data-view="status">
+        <nav class="tabs">
+          <button class="tab active" data-tab="status">Метрики</button>
+          <button class="tab" data-tab="xai">XAI</button>
+        </nav>
+        <div class="tab-view" data-view="status">
+          <h2>Метрики</h2>
+          <div class="metric">eff: <span id="eff">0.0000</span></div>
+          <div class="metric">compl: <span id="compl">0.00</span></div>
+          <h2>Цепочка</h2>
+          <pre id="out"></pre>
+        </div>
+        <div class="tab-view hidden" data-view="xai">
+          <h2>Объяснимость</h2>
+          <section class="xai-block">
+            <h3>Reasoning log</h3>
+            <ul id="reasoning-log"></ul>
+          </section>
+          <section class="xai-block">
+            <h3>Источники</h3>
+            <ul id="reasoning-sources"></ul>
+          </section>
+        </div>
       </section>
     </main>
     <script src="./app.js" type="module"></script>

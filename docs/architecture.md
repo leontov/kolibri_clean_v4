@@ -93,9 +93,40 @@
 ### Наблюдаемость и безопасность
 - **ReasoningLog** (`kolibri_x/xai/reasoning.py`): хранит цепочку рассуждений,
   уверенности и ссылки на источники.
+- **StructuredProof** (`kolibri_x/xai/proofs.py`): агрегирует подтверждённые
+  факты, вычисляет доверительные интервалы и публикует их в
+  `RuntimeResponse.proofs` вместе с событием `proofs` в `ActionJournal`.
 - **Контент-фильтры** (`kolibri_x/privacy/filters.py`, `kolibri_x/xai/guards.py`)
   — применяются перед выдачей результатов.
 - **mKSI-оценка** (`kolibri_x/eval/*`): набор миссий, метрик и отчётов.
+
+### RuntimeResponse API (обновлено)
+
+`KolibriRuntime.process` возвращает структуру, пригодную для UI и CLI.
+Ключевые поля:
+
+```json
+{
+  "plan": {"steps": [...]},
+  "answer": {"summary": "…", "support": [...]},
+  "executions": [{"step_id": "…", "output": {"status": "ok"}}],
+  "adjustments": {"tone": 0.2, "tempo": 0.1},
+  "metrics": {"privacy_enforce": {"p95": 42.0}},
+  "proofs": [
+    {
+      "fact_id": "claim:collaboration",
+      "claim": "Kolibri-x orchestrates skills…",
+      "confidence_interval": {"lower": 0.41, "upper": 0.77},
+      "sources": ["https://kolibri.example/whitepaper"],
+      "score": 0.82
+    }
+  ]
+}
+```
+
+Каждый ответ сопровождается журналом `proofs`/`proofs_cached`, поэтому цепочки
+аудита включают вычисленные интервалы. Клиенты (CLI, PWA, панель XAI) читают
+эти структуры напрямую, без повторной агрегации.
 
 ## Языковой слой и интеграции
 

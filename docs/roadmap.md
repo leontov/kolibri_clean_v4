@@ -71,6 +71,23 @@
 {"ts":"…Z","skill":"kit.iot.thermostat","decision":"deny","reason":"scope-missing:iot.write","hash":"…"}
 ```
 
+```json
+{
+  "proofs": [
+    {
+      "fact_id": "claim:collaboration",
+      "confidence_interval": {"lower": 0.41, "upper": 0.77},
+      "sources": ["https://kolibri.example/whitepaper"],
+      "score": 0.82
+    }
+  ],
+  "reasoning": {"steps": [...]}
+}
+```
+
+CLI `:export <файл>` сохраняет такую структуру, PWA XAI-вкладка читает её для
+индикации доверительных интервалов и ссылок.
+
 ## Сквозной тест-набор (CI)
 1. Policy-enforcement: навык без скоупа → блок, объяснение, подписанный лог.
 2. RAG-конфликт: противоположные источники → ответ «неопределённо» + обе ссылки.

@@ -34,6 +34,7 @@ from kolibri_x.runtime.metrics import SLOTracker
 from kolibri_x.runtime.self_learning import BackgroundSelfLearner
 from kolibri_x.runtime.workflow import ReminderEvent, ReminderRule, Workflow, WorkflowManager
 from kolibri_x.skills.store import SkillPolicyViolation, SkillStore
+from kolibri_x.xai.proofs import StructuredProof, build_structured_proofs
 from kolibri_x.xai.reasoning import ReasoningLog
 
 
@@ -106,6 +107,7 @@ class RuntimeResponse:
     executions: Sequence[SkillExecution]
     reasoning: ReasoningLog
     journal_tail: Sequence[JournalEntry]
+    proofs: Sequence[StructuredProof] = field(default_factory=tuple)
     cached: bool = False
     metrics: Mapping[str, Mapping[str, float]] = field(default_factory=dict)
 
@@ -204,6 +206,16 @@ class KolibriRuntime:
             reasoning.add_step("cache", "served response from offline cache", [], confidence=0.95)
             self.journal.append("cache_hit", {"user_id": request.user_id, "goal": request.goal})
             executions = [SkillExecution.from_dict(data) for data in cached_payload.get("executions", [])]
+            raw_proofs = cached_payload.get("proofs", [])
+            if not isinstance(raw_proofs, IterableABC):
+                raw_proofs = []
+            proofs_payload = [item for item in raw_proofs if isinstance(item, Mapping)]
+            proofs = tuple(StructuredProof.from_dict(item) for item in proofs_payload)
+            if proofs:
+                self.journal.append(
+                    "proofs_cached",
+                    {"user_id": request.user_id, "goal": request.goal, "count": len(proofs)},
+                )
             metrics_snapshot = self.metrics.report()
             self.journal.append("slo_snapshot", {"stages": metrics_snapshot})
             return RuntimeResponse(
@@ -213,6 +225,7 @@ class KolibriRuntime:
                 executions=executions,
                 reasoning=reasoning,
                 journal_tail=self.journal.tail(),
+                proofs=proofs,
                 cached=True,
                 metrics=metrics_snapshot,
             )
@@ -270,6 +283,17 @@ class KolibriRuntime:
             {"query": rag_query, "support": [fact["id"] for fact in answer.get("support", [])]},
         )
 
+        proofs = tuple(build_structured_proofs(answer))
+        if proofs:
+            self.journal.append(
+                "proofs",
+                {
+                    "query": rag_query,
+                    "count": len(proofs),
+                    "items": [proof.to_dict() for proof in proofs],
+                },
+            )
+
         with self.metrics.time_stage("execute_plan"):
             executions = self._execute_plan(plan, request, filtered_modalities, reasoning)
         with self.metrics.time_stage("profile_signals"):
@@ -292,6 +316,7 @@ class KolibriRuntime:
             "answer": answer,
             "executions": [execution.to_dict() for execution in executions],
             "adjustments": dict(adjustments),
+            "proofs": [proof.to_dict() for proof in proofs],
         }
         if self.self_learner:
             self._background_learn(request, answer, executions)
@@ -308,6 +333,7 @@ class KolibriRuntime:
             executions=executions,
             reasoning=reasoning,
             journal_tail=self.journal.tail(),
+            proofs=proofs,
             cached=False,
             metrics=metrics_snapshot,
         )

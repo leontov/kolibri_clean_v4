@@ -508,6 +508,8 @@ def test_runtime_orchestrator_end_to_end(
     assert response.plan.steps, "planner should produce at least one step"
     assert response.executions[0].output["status"] == "ok"
     assert response.answer["support"], "RAG pipeline should return supporting facts"
+    assert response.proofs, "structured proofs must accompany responses"
+    assert all(proof.confidence_interval.lower <= proof.confidence_interval.upper for proof in response.proofs)
     assert "tone" in response.adjustments and "tempo" in response.adjustments
     assert runtime.self_learner is not None
     history = runtime.self_learner.history()
@@ -519,10 +521,12 @@ def test_runtime_orchestrator_end_to_end(
     assert cached_response.cached, "second invocation should use offline cache"
     assert cached_response.answer == response.answer
     assert cached_response.executions[0].output == response.executions[0].output
+    assert cached_response.proofs == response.proofs
     journal_events = [entry.event for entry in runtime.journal.tail(5)]
     assert "slo_snapshot" in journal_events
     all_events = [entry.event for entry in runtime.journal.entries()]
     assert "self_learning" in all_events
+    assert any(event == "proofs" for event in all_events)
 
 
 def test_skill_policy_violation_blocks_execution(
@@ -540,6 +544,7 @@ def test_skill_policy_violation_blocks_execution(
     response = runtime.process(request)
     assert response.executions[0].output["status"] == "policy_blocked"
     assert response.answer["verification"]["status"] in {"partial", "ok", "conflict"}
+    assert response.proofs, "proofs should be generated even for policy blocks"
 
 
 def test_explanation_panel_surfaces_reasoning(
@@ -560,11 +565,13 @@ def test_explanation_panel_surfaces_reasoning(
         answer=response.answer,
         adjustments=response.adjustments,
         journal_entries=runtime.journal.tail(10),
+        proofs=response.proofs,
     )
     data = panel.to_dict()
     assert data["timeline"]["steps"], "timeline should expose reasoning steps"
     assert data["evidence"], "evidence should include supporting references"
     assert data["adjustments"], "empathy adjustments propagated to panel"
+    assert data["proofs"], "structured proofs should be exposed via panel"
 
 
 def test_runtime_ingestion_and_workflow_management(

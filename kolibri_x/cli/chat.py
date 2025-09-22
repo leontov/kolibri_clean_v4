@@ -92,7 +92,8 @@ class ChatSession:
         return "\n".join(parts)
 
     def _handle_command(self, command: str) -> str:
-        key = command.strip().lower()
+        raw = command.strip()
+        key = raw.lower()
         if key in {"quit", "exit"}:
             raise SystemExit(0)
         if key == "journal":
@@ -104,6 +105,13 @@ class ChatSession:
             if not self.last_response:
                 return "Нет доступного лога рассуждений."
             return self.last_response.reasoning.to_json()
+        if key.startswith("export"):
+            if not self.last_response:
+                return "Нет ответа для выгрузки."
+            parts = raw.split(maxsplit=1)
+            if len(parts) < 2:
+                return "Укажите путь: :export explanations.json"
+            return self._export_explanations(parts[1])
         return f"Неизвестная команда: :{command}"
 
     def _format_executions(self, executions: Sequence[SkillExecution]) -> List[str]:
@@ -144,6 +152,20 @@ class ChatSession:
         for entry in entries:
             lines.append(f"- #{entry.index} {entry.event}")
         return lines
+
+    def _export_explanations(self, path_str: str) -> str:
+        target = Path(path_str).expanduser()
+        data = {
+            "answer": dict(self.last_response.answer) if self.last_response else {},
+            "reasoning": self.last_response.reasoning.to_dict() if self.last_response else {},
+            "proofs": [proof.to_dict() for proof in (self.last_response.proofs or [])],
+            "journal": [entry.to_dict() for entry in self.runtime.journal.tail(self.journal_tail)],
+        }
+        try:
+            target.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+        except OSError as exc:
+            return f"Ошибка записи файла: {exc}"
+        return f"Объяснения сохранены в {target}"
 
 
 def _iter_knowledge_paths(path: Path) -> Iterable[Path]:
@@ -208,7 +230,7 @@ def main(argv: Optional[Sequence[str]] = None) -> None:
     if args.knowledge:
         _ingest_paths(runtime, args.knowledge)
 
-    print("Kolibri CLI chat. Команды: :journal, :reason, :quit")
+    print("Kolibri CLI chat. Команды: :journal, :reason, :export <файл>, :quit")
     try:
         while True:
             try:
