@@ -23,7 +23,11 @@
   "temperature": 0.15,
   "eff_threshold": 0.8,
   "max_complexity": 32.0,
-  "seed": 987654321
+  "seed": 987654321,
+  "rag_cache_min_hit_rate": 0.3,
+  "rag_cache_max_miss_rate": 0.95,
+  "rag_cache_max_entries": 512,
+  "rag_cache_min_observations": 15
 }
 ```
 
@@ -31,6 +35,10 @@
   время выполнения.
 - `quorum` и `eff_threshold` защищают от слабых кандидатов.
 - `seed` обеспечивает воспроизводимость между запусками.
+- `rag_cache_min_hit_rate`, `rag_cache_max_miss_rate`, `rag_cache_max_entries`
+  и `rag_cache_min_observations` управляют порогами для мониторинга RAG-кэша
+  в Python-рантайме. При нарушении условий `KolibriRuntime` зафиксирует
+  событие `runtime_alert` в `ActionJournal`.
 
 ## Запуск сессии
 
@@ -66,6 +74,14 @@
 В продакшн-сценариях храните журналы в неизменяемом хранилище и
 используйте `kolibri_verify` как часть CI.
 
+`KolibriRuntime` дополнительно пишет метрики RAG-кэша:
+
+- `rag_cache_stats` — агрегаты `hits`, `misses`, `hit_rate`, `miss_rate`,
+  `size` и `requests` для каждого обращения.
+- `runtime_alert` — уведомление о нарушении порогов. В payload присутствуют
+  `metric`, `observed`, `threshold`, `comparison`, а также снимок текущей
+  статистики кэша.
+
 ## Работа с KolibriRuntime
 
 Для интеграции Python-компонентов используйте `KolibriRuntime`:
@@ -86,6 +102,10 @@ print(response.answer["summary"])
 ```
 
 - Конфигурация runtime описана в [architecture](architecture.md).
+- Пороговые значения для RAG-кэша можно передать через аргумент
+  `cache_alert_thresholds`, например `KolibriRuntime(cache_alert_thresholds=
+  json.load(open("configs/kolibri.json")))`. Значения под ключами
+  `rag_cache_*` будут автоматически распознаны.
 - Все внешние навыки должны регистрироваться в `SkillStore` или напрямую в
   `SkillSandbox` (для тестов). Перед первым запросом выдавайте пользователю
   разрешения на необходимые модальности через `runtime.privacy.grant`.

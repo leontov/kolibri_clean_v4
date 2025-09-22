@@ -53,6 +53,8 @@ class RAGCache:
         time_provider: Optional[TimeProvider] = None,
     ) -> None:
         self._cache = OfflineCache(ttl=ttl, time_provider=time_provider)
+        self._hits = 0
+        self._misses = 0
 
     def _key(
         self,
@@ -82,7 +84,11 @@ class RAGCache:
     ) -> Optional[Mapping[str, object]]:
         key = self._key(user_id, query, tags, modalities, top_k)
         cached = self._cache.get(key)
-        return deepcopy(cached) if cached is not None else None
+        if cached is not None:
+            self._hits += 1
+            return deepcopy(cached)
+        self._misses += 1
+        return None
 
     def put(
         self,
@@ -95,6 +101,22 @@ class RAGCache:
     ) -> None:
         key = self._key(user_id, query, tags, modalities, top_k)
         self._cache.put(key, deepcopy(answer))
+
+    def stats(self) -> Mapping[str, float]:
+        """Returns aggregate cache metrics for observability."""
+
+        size = float(self._cache.size())
+        requests = self._hits + self._misses
+        hit_rate = float(self._hits) / requests if requests else 0.0
+        miss_rate = float(self._misses) / requests if requests else 0.0
+        return {
+            "hits": float(self._hits),
+            "misses": float(self._misses),
+            "requests": float(requests),
+            "hit_rate": hit_rate,
+            "miss_rate": miss_rate,
+            "size": size,
+        }
 
 
 __all__ = ["OfflineCache", "RAGCache"]

@@ -46,6 +46,26 @@ from kolibri_x.xai.reasoning import ReasoningLog
 SkillExecutor = Callable[[Mapping[str, object]], Mapping[str, object]]
 
 
+_CACHE_THRESHOLD_KEY_ALIASES = {
+    "rag_cache_min_hit_rate": "min_hit_rate",
+    "rag_cache_max_miss_rate": "max_miss_rate",
+    "rag_cache_max_entries": "max_size",
+    "rag_cache_min_observations": "min_observations",
+    "min_hit_rate": "min_hit_rate",
+    "max_miss_rate": "max_miss_rate",
+    "max_size": "max_size",
+    "min_observations": "min_observations",
+}
+
+
+_DEFAULT_CACHE_ALERT_THRESHOLDS = {
+    "min_hit_rate": 0.2,
+    "max_miss_rate": 0.95,
+    "max_size": 1024.0,
+    "min_observations": 10.0,
+}
+
+
 class SkillExecutionError(RuntimeError):
     """Raised when a sandboxed skill fails to produce a valid response."""
 
@@ -227,6 +247,7 @@ class KolibriRuntime:
         sensor_hub: Optional[SensorHub] = None,
         alignment_engine: Optional[TemporalAlignmentEngine] = None,
         fusion_budget: float = 1.5,
+        cache_alert_thresholds: Optional[Mapping[str, object]] = None,
     ) -> None:
         self.graph = graph or KnowledgeGraph()
         self.text_encoder = text_encoder or TextEncoder(dim=32)
@@ -254,6 +275,19 @@ class KolibriRuntime:
         self.sensor_hub = sensor_hub or SensorHub()
         self.alignment_engine = alignment_engine or TemporalAlignmentEngine()
         self.self_learner = self_learner
+        self._cache_alert_thresholds: Dict[str, float] = dict(_DEFAULT_CACHE_ALERT_THRESHOLDS)
+        if cache_alert_thresholds:
+            for key, value in cache_alert_thresholds.items():
+                alias = _CACHE_THRESHOLD_KEY_ALIASES.get(str(key))
+                if not alias:
+                    continue
+                if isinstance(value, (int, float)):
+                    self._cache_alert_thresholds[alias] = float(value)
+                elif isinstance(value, str):
+                    try:
+                        self._cache_alert_thresholds[alias] = float(value)
+                    except ValueError:
+                        continue
 
         skills = self.skill_store.list()
         if skills:
@@ -328,6 +362,12 @@ class KolibriRuntime:
                 list(filtered_modalities.keys()),
                 request.top_k,
             )
+        cache_stats = self.rag_cache.stats()
+        self._record_rag_cache_metrics(
+            cache_stats,
+            user_id=request.user_id,
+            query=rag_query,
+        )
         if cached_answer:
             answer = dict(cached_answer)
             reasoning.add_step("rag_cache", "served response from rag cache", [], confidence=0.85)
@@ -396,6 +436,89 @@ class KolibriRuntime:
             cached=False,
             metrics=metrics_snapshot,
         )
+
+    def _record_rag_cache_metrics(
+        self,
+        stats: Mapping[str, float],
+        *,
+        user_id: str,
+        query: str,
+    ) -> None:
+        requests = float(stats.get("requests", 0.0))
+        snapshot = {
+            "hits": float(stats.get("hits", 0.0)),
+            "misses": float(stats.get("misses", 0.0)),
+            "hit_rate": float(stats.get("hit_rate", 0.0)),
+            "miss_rate": float(stats.get("miss_rate", 0.0)),
+            "size": float(stats.get("size", 0.0)),
+            "requests": requests,
+        }
+        payload = {"user_id": user_id, "query": query, **snapshot}
+        self.journal.append("rag_cache_stats", payload)
+
+        thresholds = self._cache_alert_thresholds
+        observations = requests
+        min_observations = thresholds.get("min_observations", 0.0)
+        if observations < min_observations:
+            return
+
+        stat_fields = {
+            key: payload[key]
+            for key in ("hits", "misses", "hit_rate", "miss_rate", "size", "requests")
+        }
+        alerts: List[Tuple[str, Mapping[str, object]]] = []
+
+        min_hit_rate = thresholds.get("min_hit_rate")
+        hit_rate = float(stats.get("hit_rate", 0.0))
+        if min_hit_rate is not None and hit_rate < min_hit_rate:
+            alerts.append(
+                (
+                    "rag_cache_hit_rate",
+                    {
+                        "metric": "hit_rate",
+                        "observed": hit_rate,
+                        "threshold": min_hit_rate,
+                        "comparison": "<",
+                    },
+                )
+            )
+
+        max_miss_rate = thresholds.get("max_miss_rate")
+        miss_rate = float(stats.get("miss_rate", 0.0))
+        if max_miss_rate is not None and miss_rate > max_miss_rate:
+            alerts.append(
+                (
+                    "rag_cache_miss_rate",
+                    {
+                        "metric": "miss_rate",
+                        "observed": miss_rate,
+                        "threshold": max_miss_rate,
+                        "comparison": ">",
+                    },
+                )
+            )
+
+        max_size = thresholds.get("max_size")
+        size = float(stats.get("size", 0.0))
+        if max_size is not None and size > max_size:
+            alerts.append(
+                (
+                    "rag_cache_size",
+                    {
+                        "metric": "size",
+                        "observed": size,
+                        "threshold": max_size,
+                        "comparison": ">",
+                    },
+                )
+            )
+
+        for name, data in alerts:
+            details = {"user_id": user_id, "query": query, "stats": stat_fields, **data}
+            self._emit_alert(name, details)
+
+    def _emit_alert(self, name: str, payload: Mapping[str, object]) -> None:
+        self.journal.append("runtime_alert", {"name": name, **payload})
 
     def _background_learn(
         self,
