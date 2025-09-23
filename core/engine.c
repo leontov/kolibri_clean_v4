@@ -113,7 +113,7 @@ static size_t extract_memory_keywords(const char *summary, char words[][64], siz
         ptr = stop;
     }
     return count;
-
+}
 
 static void engine_update_stats(KolEngine *engine) {
     if (!engine) {
@@ -142,6 +142,7 @@ static void engine_update_stats(KolEngine *engine) {
     engine->dataset_mean = sum / (double)n;
     engine->dataset_min = minv;
     engine->dataset_max = maxv;
+}
 
 typedef struct {
     uint32_t codepoint;
