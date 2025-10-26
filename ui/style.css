@@ -24,6 +24,43 @@ main {
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
 }
 
+.tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.tab {
+  flex: 1;
+  padding: 0.5rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+.tab.active {
+  background: linear-gradient(135deg, #f97316, #facc15);
+  color: #0d1117;
+  transform: translateY(-1px);
+}
+
+.tab-view.hidden {
+  display: none;
+}
+
+.xai-block {
+  margin-bottom: 1rem;
+}
+
+.xai-block ul {
+  margin: 0;
+  padding-left: 1.2rem;
+  list-style: square;
+}
+
 textarea {
   width: 100%;
   min-height: 140px;

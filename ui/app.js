@@ -40,24 +40,21 @@ async function boot() {
   const complEl = document.getElementById('compl');
 
   const outEl = document.getElementById('out');
-  const answerEl = document.getElementById('answer');
+  const reasoningLogEl = document.getElementById('reasoning-log');
+  const reasoningSourcesEl = document.getElementById('reasoning-sources');
+  const tabButtons = document.querySelectorAll('.tab');
+  const tabViews = document.querySelectorAll('.tab-view');
 
-  const outEl = document.ge
-  const chartCanvas = document.getElementById('metric-chart');
-  const chartCtx = chartCanvas ? chartCanvas.getContext('2d') : null;
-
-  const effHistory = [];
-  const complHistory = [];
-  const MAX_HISTORY = 100;
-
-  const storyEl = document.getElementById('story');
-  const memoryEl = document.getElementById('memory');
-
-
-  const memoryEl = document.getElementById('memory');
-
-  const LANGUAGE_PREFIX = 'Kolibri запомнил:';
-  const LANGUAGE_DEFAULT_MESSAGE = 'Колибри пока молчит...';
+  tabButtons.forEach((button) => {
+    button.addEventListener('click', () => {
+      const target = button.dataset.tab;
+      tabButtons.forEach((btn) => btn.classList.toggle('active', btn === button));
+      tabViews.forEach((view) => {
+        const match = view.dataset.view === target;
+        view.classList.toggle('hidden', !match);
+      });
+    });
+  });
 
 
 
@@ -202,177 +199,95 @@ async function boot() {
     const len = wasm.kol_tail_json(ptr, cap, 10);
     const json = readString(instance, ptr, len > 0 ? len : 0);
     wasm.kol_free(ptr);
-    let blocks;
+    outEl.textContent = json;
+    let data = null;
     try {
-      const parsed = json ? JSON.parse(json) : [];
-      if (!Array.isArray(parsed)) {
-        throw new Error('Unexpected format');
+      data = JSON.parse(json);
+    } catch (err) {
+      data = null;
+    }
+    updateXai(data);
+  }
+
+  function updateXai(data) {
+    reasoningLogEl.innerHTML = '';
+    reasoningSourcesEl.innerHTML = '';
+    const steps = extractSteps(data);
+    if (steps.length === 0) {
+      const li = document.createElement('li');
+      li.textContent = 'Нет данных рассуждений.';
+      reasoningLogEl.appendChild(li);
+    } else {
+      steps.forEach((step) => {
+        const li = document.createElement('li');
+        const confidence = typeof step.confidence === 'number' ? step.confidence.toFixed(2) : '—';
+        li.textContent = `${step.name || 'step'}: ${step.message || ''} (c=${confidence})`;
+        reasoningLogEl.appendChild(li);
+      });
+    }
+
+    const sources = extractSources(data);
+    if (sources.length === 0) {
+      const li = document.createElement('li');
+      li.textContent = 'Источники не найдены.';
+      reasoningSourcesEl.appendChild(li);
+    } else {
+      sources.forEach((source) => {
+        const li = document.createElement('li');
+        if (/^https?:\/\//i.test(source)) {
+          const link = document.createElement('a');
+          link.href = source;
+          link.textContent = source;
+          link.target = '_blank';
+          link.rel = 'noopener noreferrer';
+          li.appendChild(link);
+        } else {
+          li.textContent = source;
+        }
+        reasoningSourcesEl.appendChild(li);
+      });
+    }
+  }
+
+  function extractSteps(data) {
+    if (!data) return [];
+    if (Array.isArray(data)) {
+      return [];
+    }
+    if (data.reasoning && Array.isArray(data.reasoning.steps)) {
+      return data.reasoning.steps;
+    }
+    if (Array.isArray(data.steps)) {
+      return data.steps;
+    }
+    if (data.timeline && Array.isArray(data.timeline.steps)) {
+      return data.timeline.steps;
+    }
+    return [];
+  }
+
+  function extractSources(data) {
+    const bucket = new Set();
+    if (!data) {
+      return [];
+    }
+    const proofs = Array.isArray(data.proofs) ? data.proofs : [];
+    proofs.forEach((proof) => {
+      if (proof && Array.isArray(proof.sources)) {
+        proof.sources.forEach((source) => {
+          if (source) bucket.add(String(source));
+        });
       }
-      blocks = parsed.filter((item) => item && typeof item === 'object');
-    } catch (error) {
-      console.error('Failed to parse kol_tail_json output', error);
-      outEl.innerHTML =
-        '<div class="chain-message error">Не удалось прочитать цепочку данных.</div>';
-      return;
-    }
-
-    if (blocks.length === 0) {
-      outEl.innerHTML =
-        '<div class="chain-message">Цепочка пуста — выполните Tick или отправьте сообщение.</div>';
-      return;
-    }
-
-    const markup = blocks
-      .map((block) => {
-        const step =
-          typeof block.step === 'number' && Number.isFinite(block.step)
-            ? block.step
-            : '-';
-        const digit =
-          typeof block.digit === 'number' && Number.isFinite(block.digit)
-            ? block.digit
-            : '-';
-        const eff =
-          typeof block.eff === 'number' && Number.isFinite(block.eff)
-            ? block.eff.toFixed(4)
-            : block.eff ?? '-';
-        const compl =
-          typeof block.compl === 'number' && Number.isFinite(block.compl)
-            ? block.compl.toFixed(2)
-            : block.compl ?? '-';
-        const tsNumeric = Number(block.ts);
-        const tsHuman = Number.isFinite(tsNumeric)
-          ? new Date(tsNumeric * 1000).toLocaleString()
-          : '-';
-        const formulaValue = block.formula ?? '';
-        const formula =
-          typeof formulaValue === 'string'
-            ? formulaValue
-            : String(formulaValue);
-        const hashValue = block.hash ?? '';
-        const hash =
-          typeof hashValue === 'string' ? hashValue : String(hashValue);
-        const prevValue = block.prev ?? '';
-        const prev =
-          typeof prevValue === 'string' ? prevValue : String(prevValue);
-        const hashShort = hash ? `${hash.slice(0, 8)}…` : '—';
-        const prevShort = prev ? `${prev.slice(0, 8)}…` : '—';
-        const tsRaw =
-          typeof block.ts === 'number' || typeof block.ts === 'string'
-            ? block.ts
-            : '-';
-
-        return `
-          <article class="chain-card">
-            <header>
-              <span class="chain-badge">Шаг ${escapeHtml(step)}</span>
-              <span class="chain-badge digit">Цифра ${escapeHtml(digit)}</span>
-            </header>
-            <div class="chain-body">
-              <div class="chain-field">
-                <span class="chain-label">Формула</span>
-                <span class="chain-value">${escapeHtml(formula)}</span>
-              </div>
-              <div class="chain-field">
-                <span class="chain-label">Эффективность</span>
-                <span class="chain-value metric">${escapeHtml(eff)}</span>
-              </div>
-              <div class="chain-field">
-                <span class="chain-label">Сложность</span>
-                <span class="chain-value metric">${escapeHtml(compl)}</span>
-              </div>
-              <div class="chain-field">
-                <span class="chain-label">Время</span>
-                <span class="chain-value">${escapeHtml(tsHuman)}</span>
-              </div>
-            </div>
-            <div class="chain-footer">
-              <div class="chain-field">
-                <span class="chain-label">Хэш</span>
-                <span class="chain-value">${escapeHtml(hash)}</span>
-              </div>
-              <div class="chain-field">
-                <span class="chain-label">Предыдущий</span>
-                <span class="chain-value">${escapeHtml(prev)}</span>
-              </div>
-              <div class="chain-field">
-                <span class="chain-label">Кратко</span>
-                <span class="chain-value">${escapeHtml(hashShort)} · ${escapeHtml(prevShort)}</span>
-              </div>
-              <div class="chain-field">
-                <span class="chain-label">TS (raw)</span>
-                <span class="chain-value">${escapeHtml(tsRaw)}</span>
-              </div>
-            </div>
-          </article>
-        `;
-      })
-      .join('');
-
-    outEl.innerHTML = markup;
-  }
-
-  function refreshLanguageSummary() {
-    const cap = 512;
-    const ptr = wasm.kol_alloc(cap);
-    if (ptr === 0) {
-      memoryEl.textContent = LANGUAGE_DEFAULT_MESSAGE;
-      return;
-    }
-    const len = wasm.kol_language_generate(ptr, cap);
-    const text = len > 0 ? readString(instance, ptr, len) : '';
-    wasm.kol_free(ptr);
-
-    let display = text.trim();
-    if (len <= 0 || display.length === 0) {
-      memoryEl.textContent = LANGUAGE_DEFAULT_MESSAGE;
-      return;
-    }
-    if (display === LANGUAGE_DEFAULT_MESSAGE) {
-      memoryEl.textContent = LANGUAGE_DEFAULT_MESSAGE;
-      return;
-    }
-    if (display.startsWith(LANGUAGE_PREFIX)) {
-      display = display.slice(LANGUAGE_PREFIX.length).trim();
-    }
-    memoryEl.textContent = display.length > 0 ? display : LANGUAGE_DEFAULT_MESSAGE;
-  }
-
-  function readWasmText(invoker) {
-    const cap = 2048;
-    const ptr = wasm.kol_alloc(cap);
-    try {
-      const len = invoker(ptr, cap);
-      const usable = len > 0 ? len : 0;
-      const raw = readString(instance, ptr, usable);
-      return raw.trim();
-    } finally {
-      wasm.kol_free(ptr);
-    }
-  }
-
-  function refreshNarrative() {
-    const text = readWasmText((ptr, cap) => wasm.kol_emit_text(ptr, cap));
-    storyEl.textContent = text || '—';
-  }
-
-  function refreshMemory() {
-    const text = readWasmText((ptr, cap) => wasm.kol_language_generate(ptr, cap));
-    memoryEl.textContent = text || '—';
-  }
-
-  function refreshInsights() {
-    refreshNarrative();
-    refreshMemory();
-  }
-
-  function refreshAnswer() {
-    const cap = 4096;
-    const ptr = wasm.kol_alloc(cap);
-    const len = wasm.kol_emit_text(ptr, cap);
-    const text = len > 0 ? readString(instance, ptr, len) : '';
-    wasm.kol_free(ptr);
-    answerEl.textContent = text;
+    });
+    const answerSupport = data.answer && Array.isArray(data.answer.support) ? data.answer.support : [];
+    answerSupport.forEach((fact) => {
+      if (fact && Array.isArray(fact.sources)) {
+        fact.sources.forEach((source) => {
+          if (source) bucket.add(String(source));
+        });
+      }
+    });
+    return Array.from(bucket.values()).sort();
   }
 
   refreshHud();

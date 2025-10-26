@@ -71,6 +71,22 @@
 {"ts":"…Z","skill":"kit.iot.thermostat","decision":"deny","reason":"scope-missing:iot.write","hash":"…"}
 ```
 
+```json
+{
+  "proofs": [
+    {
+      "fact_id": "claim:collaboration",
+      "confidence_interval": {"lower": 0.41, "upper": 0.77},
+      "sources": ["https://kolibri.example/whitepaper"],
+      "score": 0.82
+    }
+  ],
+  "reasoning": {"steps": [...]}
+}
+```
+
+CLI `:export <файл>` сохраняет такую структуру, PWA XAI-вкладка читает её для
+индикации доверительных интервалов и ссылок.
 - `SkillQuota` хранит числовые лимиты (`cpu_ms`, `wall_ms`, `net_bytes`, `fs_ops`, `invocations`, и т. д.) и передаётся в песочницу до вызова навыка.
 - `SkillSandbox` измеряет wall/CPU-время и обновляет счётчики I/O через `record_io`, блокируя дальнейшие вызовы при достижении квот.
 

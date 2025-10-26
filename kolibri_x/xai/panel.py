@@ -7,6 +7,7 @@ from typing import Iterable, List, Mapping, MutableMapping, Sequence
 
 from kolibri_x.core.planner import Plan
 from kolibri_x.runtime.journal import JournalEntry
+from kolibri_x.xai.proofs import StructuredProof
 from kolibri_x.xai.reasoning import ReasoningLog, ReasoningStep
 
 
@@ -68,6 +69,7 @@ class ExplanationPanel:
         answer: Mapping[str, object],
         adjustments: Mapping[str, float],
         journal_entries: Sequence[JournalEntry],
+        proofs: Sequence[StructuredProof] | None = None,
     ) -> None:
         self.plan = plan
         self.timeline = ExplanationTimeline(tuple(reasoning.steps()))
@@ -75,6 +77,7 @@ class ExplanationPanel:
         self.adjustments = dict(adjustments)
         self.evidence = self._extract_evidence(journal_entries, answer)
         self.audit_trail = [entry.to_dict() for entry in journal_entries]
+        self.proofs = tuple(proofs or ())
 
     def to_dict(self) -> Mapping[str, object]:
         return {
@@ -84,6 +87,7 @@ class ExplanationPanel:
             "adjustments": self.adjustments,
             "evidence": [item.to_dict() for item in self.evidence],
             "audit_trail": self.audit_trail,
+            "proofs": [proof.to_dict() for proof in self.proofs],
         }
 
     def _extract_evidence(
