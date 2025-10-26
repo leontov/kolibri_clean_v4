@@ -21,6 +21,15 @@ function readString(wasm, ptr, len) {
   return decoder.decode(mem.subarray(0, len));
 }
 
+function escapeHtml(value) {
+  return String(value ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 async function boot() {
   const instance = await loadWasm();
   const wasm = instance.exports;
@@ -29,6 +38,7 @@ async function boot() {
   const msgEl = document.getElementById('msg');
   const effEl = document.getElementById('eff');
   const complEl = document.getElementById('compl');
+
   const outEl = document.getElementById('out');
   const reasoningLogEl = document.getElementById('reasoning-log');
   const reasoningSourcesEl = document.getElementById('reasoning-sources');
@@ -46,25 +56,141 @@ async function boot() {
     });
   });
 
-  document.getElementById('send').addEventListener('click', () => {
+
+
+  const sendBtn = document.getElementById('send');
+  let isSending = false;
+
+  async function handleSend() {
+    if (isSending) return;
     const txt = msgEl.value.trim();
     if (!txt) return;
+
+
+    isSending = true;
+    const originalText = sendBtn.textContent;
+    sendBtn.disabled = true;
+    sendBtn.textContent = 'Отправка…';
+
+    try {
+      const ptr = writeString(instance, txt);
+      wasm.kol_chat_push(ptr);
+      wasm.kol_free(ptr);
+      msgEl.value = '';
+      refreshHud();
+      refreshTail();
+    } finally {
+      sendBtn.disabled = false;
+      sendBtn.textContent = originalText;
+      isSending = false;
+    }
+  }
+
+  sendBtn.addEventListener('click', () => {
+    handleSend();
+  });
+
+  msgEl.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+      event.preventDefault();
+      handleSend();
+    }
+
     const ptr = writeString(instance, txt);
     wasm.kol_chat_push(ptr);
     wasm.kol_free(ptr);
     msgEl.value = '';
     refreshHud();
+    refreshTail();
+
+    refreshAnswer();
+
+
+    refreshInsights();
+
+    refreshLanguageSummary();
+
+
+
   });
 
   document.getElementById('tick').addEventListener('click', () => {
     wasm.kol_tick();
     refreshHud();
     refreshTail();
+
+    refreshAnswer();
+
+
+    refreshInsights();
+
+    refreshLanguageSummary();
+
+
   });
 
   function refreshHud() {
-    effEl.textContent = wasm.kol_eff().toFixed(4);
-    complEl.textContent = wasm.kol_compl().toFixed(2);
+    const eff = wasm.kol_eff();
+    const compl = wasm.kol_compl();
+
+    effEl.textContent = eff.toFixed(4);
+    complEl.textContent = compl.toFixed(2);
+
+    effHistory.push(eff);
+    complHistory.push(compl);
+    if (effHistory.length > MAX_HISTORY) {
+      effHistory.shift();
+      complHistory.shift();
+    }
+
+    renderHistoryChart();
+  }
+
+  function renderHistoryChart() {
+    if (!chartCtx) {
+      return;
+    }
+
+    const len = effHistory.length;
+    chartCtx.clearRect(0, 0, chartCanvas.width, chartCanvas.height);
+    if (!len) {
+      return;
+    }
+
+    const padding = 10;
+    const usableWidth = chartCanvas.width - padding * 2;
+    const usableHeight = chartCanvas.height - padding * 2;
+    const points = effHistory.map((value, index) => ({
+      x: padding + (len === 1 ? usableWidth / 2 : (usableWidth * index) / (len - 1)),
+      value,
+      compl: complHistory[index],
+    }));
+
+    const combined = effHistory.concat(complHistory);
+    const maxValue = combined.length ? Math.max(...combined) : 1;
+    const minValue = combined.length ? Math.min(...combined) : 0;
+    const range = Math.max(maxValue - minValue, 1e-6);
+
+    chartCtx.lineWidth = 2;
+
+    const drawLine = (key, color) => {
+      chartCtx.beginPath();
+      chartCtx.strokeStyle = color;
+      points.forEach((pt, idx) => {
+        const value = key === 'eff' ? pt.value : pt.compl;
+        const y =
+          padding + usableHeight - ((value - minValue) / range) * usableHeight;
+        if (idx === 0) {
+          chartCtx.moveTo(pt.x, y);
+        } else {
+          chartCtx.lineTo(pt.x, y);
+        }
+      });
+      chartCtx.stroke();
+    };
+
+    drawLine('eff', '#3b82f6');
+    drawLine('compl', '#10b981');
   }
 
   function refreshTail() {
@@ -166,6 +292,12 @@ async function boot() {
 
   refreshHud();
   refreshTail();
+  refreshAnswer();
+
+  refreshInsights();
+
+  refreshLanguageSummary();
+
 
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('./pwa/sw.js').catch(() => {});

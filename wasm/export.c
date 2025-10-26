@@ -48,6 +48,16 @@ int wasm_kol_tail_json(uint32_t buf_ptr, int cap, int n) {
     return kol_tail_json(wasm_ptr(buf_ptr), cap, n);
 }
 
+__attribute__((export_name("kol_emit_text")))
+int wasm_kol_emit_text(uint32_t buf_ptr, int cap) {
+    return kol_emit_text(wasm_ptr(buf_ptr), cap);
+}
+
+__attribute__((export_name("kol_language_generate")))
+int wasm_kol_language_generate(uint32_t buf_ptr, int cap) {
+    return kol_language_generate(wasm_ptr(buf_ptr), cap);
+}
+
 __attribute__((export_name("kol_alloc")))
 uint32_t wasm_kol_alloc(uint32_t size) {
     void *ptr = kol_alloc((size_t)size);

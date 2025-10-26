@@ -19,6 +19,16 @@ typedef struct {
     KolDataset dataset;
     double xs[32];
     double ys[32];
+    double baseline[32];
+    double obs_values[256];
+    size_t obs_count;
+    size_t obs_head;
+    KolEvent event_buffer[8];
+    size_t event_count;
+    size_t event_head;
+    double dataset_mean;
+    double dataset_min;
+    double dataset_max;
     uint8_t last_digits[128];
     size_t last_digit_count;
     char last_text[128];
@@ -27,6 +37,7 @@ typedef struct {
 KolEngine *engine_create(uint8_t depth, uint32_t seed);
 void       engine_free(KolEngine *engine);
 int        engine_tick(KolEngine *engine, const KolEvent *in, KolOutput *out);
+void       engine_reset_dataset(KolEngine *engine);
 int        engine_ingest_text(KolEngine *engine, const char *utf8, KolEvent *out_event);
 int        engine_ingest_digits(KolEngine *engine, const uint8_t *digits, size_t len, KolEvent *out_event);
 int        engine_ingest_bytes(KolEngine *engine, const uint8_t *bytes, size_t len, KolEvent *out_event);

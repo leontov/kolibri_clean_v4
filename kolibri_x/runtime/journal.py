@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import hashlib
 import json
+from pathlib import Path
 from typing import List, Mapping, MutableMapping, Sequence
 
 
@@ -58,6 +59,24 @@ class JournalEntry:
             "hash": self.hash,
         }
 
+    @classmethod
+    def from_dict(cls, data: Mapping[str, object]) -> "JournalEntry":
+        timestamp_raw = data.get("timestamp")
+        if not isinstance(timestamp_raw, str):
+            raise ValueError("journal entry requires string timestamp")
+        timestamp = datetime.fromisoformat(timestamp_raw)
+        entry = cls(
+            index=int(data.get("index", 0)),
+            event=str(data.get("event", "")),
+            payload=dict(data.get("payload", {})),
+            timestamp=timestamp,
+            prev_hash=str(data.get("prev_hash", "0" * 64)),
+        )
+        stored_hash = data.get("hash")
+        if stored_hash is not None and str(stored_hash) != entry.hash:
+            raise ValueError("journal entry hash mismatch during load")
+        return entry
+
 
 class ActionJournal:
     """Maintains a hash-chained log of runtime decisions."""
@@ -93,6 +112,32 @@ class ActionJournal:
 
     def to_json(self) -> str:
         return json.dumps([entry.to_dict() for entry in self._entries], ensure_ascii=False, indent=2)
+
+    def save(self, path: str | Path) -> None:
+        destination = Path(path)
+        if destination.parent:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+        with destination.open("w", encoding="utf-8") as stream:
+            for entry in self._entries:
+                json.dump(entry.to_dict(), stream, ensure_ascii=False, sort_keys=True)
+                stream.write("\n")
+
+    @classmethod
+    def load(cls, path: str | Path) -> "ActionJournal":
+        source = Path(path)
+        journal = cls()
+        if not source.exists():
+            return journal
+        with source.open("r", encoding="utf-8") as stream:
+            for line in stream:
+                if not line.strip():
+                    continue
+                payload = json.loads(line)
+                entry = JournalEntry.from_dict(payload)
+                journal._entries.append(entry)
+        if not journal.verify():
+            raise ValueError("loaded journal failed integrity verification")
+        return journal
 
 
 __all__ = ["ActionJournal", "JournalEntry"]

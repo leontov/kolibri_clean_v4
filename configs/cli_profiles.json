@@ -1,0 +1,19 @@
+{
+  "profiles": [
+    {
+      "name": "kolibri_run",
+      "command": ["./kolibri_native", "--ticks", "32", "--depth", "3", "--no-bootstrap"],
+      "warmup": 1
+    },
+    {
+      "name": "kolibri_verify",
+      "command": ["node", "tools/chain_verify.js"],
+      "depends_on": "kolibri_run"
+    },
+    {
+      "name": "kolibri_replay",
+      "command": ["python3", "tools/replay_chain.py"],
+      "depends_on": "kolibri_run"
+    }
+  ]
+}

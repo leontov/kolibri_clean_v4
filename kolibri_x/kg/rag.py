@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable, List, Mapping, Optional, Sequence
+from typing import Dict, Iterable, List, Mapping, Optional, Sequence
 
 from kolibri_x.core.encoders import TextEncoder
 from kolibri_x.kg.graph import KnowledgeGraph, Node
@@ -28,6 +28,15 @@ class RAGPipeline:
     def __init__(self, graph: KnowledgeGraph, encoder: Optional[TextEncoder] = None) -> None:
         self.graph = graph
         self.encoder = encoder or TextEncoder(dim=32)
+        self._embedding_cache: Dict[str, Sequence[float]] = {}
+        self._subscriptions = (
+            ("node_added", self._handle_node_change),
+            ("node_updated", self._handle_node_change),
+            ("node_removed", self._handle_node_removal),
+        )
+        for event, handler in self._subscriptions:
+            self.graph.register_listener(event, handler)
+        self._warm_nodes(self.graph.nodes())
 
     def retrieve(self, query: str, top_k: int = 5) -> List[RetrievedFact]:
         query_vector = self.encoder.encode(query)
@@ -35,7 +44,10 @@ class RAGPipeline:
         for node in self.graph.nodes():
             if not node.text:
                 continue
-            node_vector = self.encoder.encode(node.text)
+            node_vector = self._embedding_cache.get(node.id)
+            if node_vector is None:
+                node_vector = self.encoder.encode(node.text)
+                self._embedding_cache[node.id] = node_vector
             score = self._dot(query_vector, node_vector)
             if score > 0.0:
                 scored.append(RetrievedFact(node=node, score=score))
@@ -115,6 +127,26 @@ class RAGPipeline:
             snippet = fact.node.text.replace("\n", " ").strip()
             lines.append(f"- {snippet} (confidence={fact.node.confidence:.2f})")
         return "\n".join(lines)
+
+    def _handle_node_change(self, payload: Mapping[str, object]) -> None:
+        node = payload.get("node")
+        if not isinstance(node, Node):
+            return
+        if not node.text:
+            self._embedding_cache.pop(node.id, None)
+            return
+        self._embedding_cache[node.id] = self.encoder.encode(node.text)
+
+    def _handle_node_removal(self, payload: Mapping[str, object]) -> None:
+        node_id = payload.get("node_id")
+        if isinstance(node_id, str):
+            self._embedding_cache.pop(node_id, None)
+
+    def _warm_nodes(self, nodes: Iterable[Node]) -> None:
+        for node in nodes:
+            if not node.text:
+                continue
+            self._embedding_cache[node.id] = self.encoder.encode(node.text)
 
 
 __all__ = ["RAGPipeline", "RetrievedFact"]

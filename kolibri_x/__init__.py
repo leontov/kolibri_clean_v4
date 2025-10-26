@@ -13,7 +13,12 @@ from kolibri_x.runtime.orchestrator import (
     SkillExecutionError,
     SkillSandbox,
 )
-from kolibri_x.skills.store import SkillManifest, SkillPolicyViolation, SkillStore
+from kolibri_x.skills.store import (
+    SkillManifest,
+    SkillManifestValidationError,
+    SkillPolicyViolation,
+    SkillStore,
+)
 
 __all__ = [
     "KolibriRuntime",
@@ -24,6 +29,7 @@ __all__ = [
     "SkillSandbox",
     "SkillManifest",
     "SkillPolicyViolation",
+    "SkillManifestValidationError",
     "SkillStore",
     "OfflineCache",
     "RAGCache",

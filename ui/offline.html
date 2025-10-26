@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="ru">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Kolibri — офлайн</title>
+    <link rel="stylesheet" href="./style.css" />
+    <style>
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        min-height: 100vh;
+        background: #0d1117;
+        color: #f8fafc;
+        margin: 0;
+        font-family: "Inter", system-ui, -apple-system, sans-serif;
+      }
+      .offline-card {
+        background: rgba(15, 23, 42, 0.8);
+        padding: 2.5rem;
+        border-radius: 1.5rem;
+        text-align: center;
+        max-width: 28rem;
+        box-shadow: 0 20px 60px rgba(2, 132, 199, 0.3);
+      }
+      .offline-card h1 {
+        margin-bottom: 1rem;
+        font-size: 2rem;
+        color: #22d3ee;
+      }
+      .offline-card p {
+        margin-bottom: 1.5rem;
+        line-height: 1.5;
+      }
+      .offline-card button {
+        padding: 0.75rem 1.5rem;
+        border-radius: 999px;
+        border: none;
+        background: #22d3ee;
+        color: #0f172a;
+        font-size: 1rem;
+        cursor: pointer;
+        transition: transform 0.2s ease, box-shadow 0.2s ease;
+      }
+      .offline-card button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 10px 25px rgba(34, 211, 238, 0.3);
+      }
+    </style>
+  </head>
+  <body>
+    <div class="offline-card">
+      <h1>Нет соединения</h1>
+      <p>
+        Kolibri ИИ недоступен без сети. Проверьте подключение к интернету и
+        попробуйте обновить страницу.
+      </p>
+      <button type="button" onclick="window.location.reload()">
+        Повторить попытку
+      </button>
+    </div>
+  </body>
+</html>
